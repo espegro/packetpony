@@ -23,8 +23,14 @@ type ServerConfig struct {
 }
 
 type LoggingConfig struct {
-	Syslog  SyslogConfig  `yaml:"syslog"`
+	Syslog SyslogConfig  `yaml:"syslog"`
 	JSONLog JSONLogConfig `yaml:"jsonlog"`
+	Stdout StdoutConfig  `yaml:"stdout"`
+}
+
+type StdoutConfig struct {
+	Enabled bool `yaml:"enabled"`
+	UseJSON bool `yaml:"use_json"`
 }
 
 type SyslogConfig struct {

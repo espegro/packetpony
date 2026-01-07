@@ -36,3 +36,7 @@ Thumbs.db
 # Claude/AI-related
 .claude/
 CLAUDE.md
+
+# Local configuration files
+config.yaml
+config-test.yaml

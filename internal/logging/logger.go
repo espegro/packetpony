@@ -61,6 +61,12 @@ func NewMultiLogger(cfg config.LoggingConfig) (*MultiLogger, error) {
 		loggers = append(loggers, jsonLogger)
 	}
 
+	// Setup stdout logging if enabled
+	if cfg.Stdout.Enabled {
+		stdoutLogger := NewStdoutLogger(cfg.Stdout.UseJSON)
+		loggers = append(loggers, stdoutLogger)
+	}
+
 	if len(loggers) == 0 {
 		return nil, fmt.Errorf("no logging backends enabled")
 	}

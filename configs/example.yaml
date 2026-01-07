@@ -7,7 +7,7 @@ server:
 logging:
   # Syslog configuration
   syslog:
-    enabled: true
+    enabled: false           # Disabled by default - use stdout for journald
     network: "udp"          # udp, tcp, or unix
     address: "localhost:514"
     tag: "packetpony"
@@ -17,6 +17,12 @@ logging:
   jsonlog:
     enabled: false
     path: "/var/log/packetpony/events.json"
+
+  # Stdout logging - recommended for systemd/journald
+  # When running under systemd, logs are automatically captured by journald
+  stdout:
+    enabled: true
+    use_json: false          # false = human-readable text, true = JSON format
 
 # Metrics configuration
 metrics:

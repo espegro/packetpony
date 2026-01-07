@@ -66,7 +66,7 @@ func (l *LoggingConfig) Validate() error {
 		}
 	}
 
-	if !l.Syslog.Enabled && !l.JSONLog.Enabled {
+	if !l.Syslog.Enabled && !l.JSONLog.Enabled && !l.Stdout.Enabled {
 		return fmt.Errorf("at least one logging method must be enabled")
 	}
 

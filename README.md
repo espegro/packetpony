@@ -203,6 +203,49 @@ listener=http-proxy proto=tcp event=close src=192.168.1.50:12345 dst=192.168.1.1
 
 For UDP, `pkts_sent` and `pkts_recv` are also included.
 
+### Stdout Logging (Recommended for systemd)
+
+PacketPony supports logging to stdout, which is automatically captured by journald when running under systemd:
+
+```yaml
+logging:
+  stdout:
+    enabled: true
+    use_json: false  # false = human-readable text, true = JSON format
+```
+
+**Text format output:**
+```
+[2026-01-07 10:38:44] Connection opened: listener=ssh-test protocol=tcp src=127.0.0.1:49500 dst=127.0.0.1:22
+[2026-01-07 10:40:44] Connection closed: listener=ssh-test protocol=tcp src=127.0.0.1:49500 dst=127.0.0.1:22 duration=120016ms bytes_sent=0 bytes_recv=29
+```
+
+**View logs with journalctl:**
+```bash
+# Follow logs in real-time
+sudo journalctl -u packetpony -f
+
+# View logs since last boot
+sudo journalctl -u packetpony -b
+
+# View logs from last hour
+sudo journalctl -u packetpony --since "1 hour ago"
+```
+
+### Syslog Logging
+
+Traditional syslog is also supported:
+
+```yaml
+logging:
+  syslog:
+    enabled: true
+    network: "udp"
+    address: "localhost:514"
+    tag: "packetpony"
+    priority: "info"
+```
+
 ### JSON Logging
 
 With JSON logging enabled, structured events are written to file:
