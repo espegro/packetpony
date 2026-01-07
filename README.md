@@ -1,3 +1,6 @@
+<img width="500" alt="image" src="https://github.com/user-attachments/assets/71b7783e-f8e4-4053-9b1c-cc8234f606b4" />
+
+
 # PacketPony
 
 PacketPony is a modern network proxy/forwarder service written in Go, inspired by redir and xinetd. It provides advanced rate limiting, access control, logging, and metrics for both TCP and UDP traffic.
