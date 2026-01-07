@@ -16,14 +16,16 @@ import (
 
 // TCPListener manages a TCP listening socket and handles connections
 type TCPListener struct {
-	config      *config.ListenerConfig
-	listener    net.Listener
-	proxy       *proxy.TCPProxy
-	logger      logging.Logger
-	ctx         context.Context
-	cancel      context.CancelFunc
-	wg          sync.WaitGroup
-	rateLimiter *ratelimit.RateLimitManager
+	config         *config.ListenerConfig
+	listener       net.Listener
+	proxy          *proxy.TCPProxy
+	logger         logging.Logger
+	ctx            context.Context
+	cancel         context.CancelFunc
+	wg             sync.WaitGroup
+	rateLimiter    *ratelimit.RateLimitManager
+	activeConnsMu  sync.Mutex
+	activeConns    []net.Conn
 }
 
 // NewTCPListener creates a new TCP listener
@@ -55,6 +57,7 @@ func NewTCPListener(
 		ctx:         listenerCtx,
 		cancel:      cancel,
 		rateLimiter: rateLimiter,
+		activeConns: make([]net.Conn, 0),
 	}, nil
 }
 
@@ -94,6 +97,9 @@ func (l *TCPListener) Stop() error {
 		l.listener.Close()
 	}
 
+	// Close all active connections to force Read() calls to return
+	l.closeAllConnections()
+
 	// Close rate limiter cleanup goroutines
 	l.rateLimiter.Close()
 
@@ -105,6 +111,36 @@ func (l *TCPListener) Stop() error {
 	})
 
 	return nil
+}
+
+// trackConnection adds a connection to the active connections list
+func (l *TCPListener) trackConnection(conn net.Conn) {
+	l.activeConnsMu.Lock()
+	defer l.activeConnsMu.Unlock()
+	l.activeConns = append(l.activeConns, conn)
+}
+
+// untrackConnection removes a connection from the active connections list
+func (l *TCPListener) untrackConnection(conn net.Conn) {
+	l.activeConnsMu.Lock()
+	defer l.activeConnsMu.Unlock()
+	for i, c := range l.activeConns {
+		if c == conn {
+			l.activeConns = append(l.activeConns[:i], l.activeConns[i+1:]...)
+			break
+		}
+	}
+}
+
+// closeAllConnections closes all active connections
+func (l *TCPListener) closeAllConnections() {
+	l.activeConnsMu.Lock()
+	defer l.activeConnsMu.Unlock()
+
+	for _, conn := range l.activeConns {
+		conn.Close()
+	}
+	l.activeConns = nil
 }
 
 // Name returns the listener name
@@ -132,11 +168,15 @@ func (l *TCPListener) acceptLoop() {
 			}
 		}
 
+		// Track connection
+		l.trackConnection(conn)
+
 		// Handle connection in a new goroutine
 		l.wg.Add(1)
-		go func() {
+		go func(c net.Conn) {
 			defer l.wg.Done()
-			l.proxy.HandleConnection(conn)
-		}()
+			defer l.untrackConnection(c)
+			l.proxy.HandleConnection(c)
+		}(conn)
 	}
 }
