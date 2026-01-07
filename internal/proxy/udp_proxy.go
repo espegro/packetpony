@@ -109,6 +109,11 @@ func (p *UDPProxy) HandlePacket(data []byte, srcAddr *net.UDPAddr, listenerConn 
 
 	// Check bandwidth limit
 	if !p.rateLimiter.AllowBandwidth(clientIP, int64(len(data))) {
+		p.logger.LogInfo("Packet dropped: bandwidth limit exceeded", map[string]interface{}{
+			"listener":  p.config.Name,
+			"client_ip": clientIP,
+			"bytes":     len(data),
+		})
 		p.metrics.RateLimitDrops.WithLabelValues(p.config.Name, "bandwidth_limit").Inc()
 		return
 	}

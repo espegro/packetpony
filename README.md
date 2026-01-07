@@ -54,6 +54,17 @@ go build -o packetpony ./cmd/packetpony
 ./packetpony -config configs/example.yaml
 ```
 
+### Running as a systemd service
+
+For production deployments, see the [systemd deployment guide](deployment/systemd/README.md) for instructions on running PacketPony as a system service with automatic startup, logging, and monitoring.
+
+Quick setup:
+```bash
+sudo cp deployment/systemd/packetpony.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now packetpony
+```
+
 ## Configuration
 
 PacketPony uses YAML for configuration. See `configs/example.yaml` for a complete example.
