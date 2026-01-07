@@ -193,6 +193,14 @@ func (r *RateLimitConfig) Validate() error {
 		return fmt.Errorf("connections_window must be non-negative")
 	}
 
+	if r.MaxConnectionAttemptsPerIP < 0 {
+		return fmt.Errorf("max_connection_attempts_per_ip must be non-negative")
+	}
+
+	if r.AttemptsWindow < 0 {
+		return fmt.Errorf("attempts_window must be non-negative")
+	}
+
 	if r.MaxBandwidthPerIP != "" {
 		if _, err := ParseBandwidth(r.MaxBandwidthPerIP); err != nil {
 			return fmt.Errorf("invalid max_bandwidth_per_ip: %w", err)
@@ -205,6 +213,26 @@ func (r *RateLimitConfig) Validate() error {
 
 	if r.MaxTotalConnections < 0 {
 		return fmt.Errorf("max_total_connections must be non-negative")
+	}
+
+	// Validate action mode
+	if r.Action != "" {
+		validActions := map[string]bool{
+			"drop": true, "throttle": true, "log_only": true,
+		}
+		if !validActions[strings.ToLower(r.Action)] {
+			return fmt.Errorf("invalid action: %s (must be drop, throttle, or log_only)", r.Action)
+		}
+	}
+
+	// Validate throttle_minimum if action is throttle
+	if strings.ToLower(r.Action) == "throttle" {
+		if r.ThrottleMinimumBandwidth == "" {
+			return fmt.Errorf("throttle_minimum is required when action is 'throttle'")
+		}
+		if _, err := ParseBandwidth(r.ThrottleMinimumBandwidth); err != nil {
+			return fmt.Errorf("invalid throttle_minimum: %w", err)
+		}
 	}
 
 	return nil

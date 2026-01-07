@@ -108,12 +108,28 @@ func (p *UDPProxy) HandlePacket(data []byte, srcAddr *net.UDPAddr, listenerConn 
 	}
 
 	// Check bandwidth limit
-	if !p.rateLimiter.AllowBandwidth(clientIP, int64(len(data))) {
-		p.logger.LogInfo("Packet dropped: bandwidth limit exceeded", map[string]interface{}{
-			"listener":  p.config.Name,
-			"client_ip": clientIP,
-			"bytes":     len(data),
-		})
+	allowed := p.rateLimiter.AllowBandwidth(clientIP, int64(len(data)))
+
+	// Log if over limit (works for all modes)
+	if p.rateLimiter.IsBandwidthOverLimit(clientIP, int64(len(data))) {
+		action := p.rateLimiter.GetAction()
+		if action == "log_only" {
+			p.logger.LogWarning("Bandwidth limit exceeded (log_only mode)", map[string]interface{}{
+				"listener":  p.config.Name,
+				"client_ip": clientIP,
+				"bytes":     len(data),
+			})
+		} else if !allowed {
+			p.logger.LogInfo("Packet dropped: bandwidth limit exceeded", map[string]interface{}{
+				"listener":  p.config.Name,
+				"client_ip": clientIP,
+				"bytes":     len(data),
+				"action":    action,
+			})
+		}
+	}
+
+	if !allowed {
 		p.metrics.RateLimitDrops.WithLabelValues(p.config.Name, "bandwidth_limit").Inc()
 		return
 	}
@@ -171,6 +187,34 @@ func (p *UDPProxy) startSessionReader(sess *session.Session, listenerConn *net.U
 		}
 
 		if n > 0 {
+			// Check bandwidth limit for return traffic
+			clientIP := sess.SourceAddr.IP.String()
+			allowed := p.rateLimiter.AllowBandwidth(clientIP, int64(n))
+
+			// Log if over limit (works for all modes)
+			if p.rateLimiter.IsBandwidthOverLimit(clientIP, int64(n)) {
+				action := p.rateLimiter.GetAction()
+				if action == "log_only" {
+					p.logger.LogWarning("Bandwidth limit exceeded on return traffic (log_only mode)", map[string]interface{}{
+						"listener":  p.config.Name,
+						"client_ip": clientIP,
+						"bytes":     n,
+					})
+				} else if !allowed {
+					p.logger.LogInfo("Packet dropped: bandwidth limit exceeded on return traffic", map[string]interface{}{
+						"listener":  p.config.Name,
+						"client_ip": clientIP,
+						"bytes":     n,
+						"action":    action,
+					})
+				}
+			}
+
+			if !allowed {
+				p.metrics.RateLimitDrops.WithLabelValues(p.config.Name, "bandwidth_limit").Inc()
+				return
+			}
+
 			// Send response back to client
 			_, err = listenerConn.WriteToUDP(buf[:n], sess.SourceAddr)
 			if err != nil {

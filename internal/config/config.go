@@ -68,12 +68,17 @@ type ListenerConfig struct {
 }
 
 type RateLimitConfig struct {
-	MaxConnectionsPerIP int           `yaml:"max_connections_per_ip"`
-	ConnectionsWindow   time.Duration `yaml:"connections_window"`
-	MaxBandwidthPerIP   string        `yaml:"max_bandwidth_per_ip"`
-	BandwidthWindow     time.Duration `yaml:"bandwidth_window"`
-	MaxTotalConnections int           `yaml:"max_total_connections"`
-	maxBandwidthBytes   int64         // parsed value
+	MaxConnectionsPerIP        int           `yaml:"max_connections_per_ip"`
+	ConnectionsWindow          time.Duration `yaml:"connections_window"`
+	MaxConnectionAttemptsPerIP int           `yaml:"max_connection_attempts_per_ip"`
+	AttemptsWindow             time.Duration `yaml:"attempts_window"`
+	MaxBandwidthPerIP          string        `yaml:"max_bandwidth_per_ip"`
+	BandwidthWindow            time.Duration `yaml:"bandwidth_window"`
+	MaxTotalConnections        int           `yaml:"max_total_connections"`
+	Action                     string        `yaml:"action"`           // drop, throttle, log_only
+	ThrottleMinimumBandwidth   string        `yaml:"throttle_minimum"` // Minimum bandwidth when throttling
+	maxBandwidthBytes          int64         // parsed value
+	throttleMinimumBytes       int64         // parsed value
 }
 
 type TCPConfig struct {
@@ -108,6 +113,13 @@ func LoadConfig(path string) (*Config, error) {
 			}
 			config.Listeners[i].RateLimits.maxBandwidthBytes = bytes
 		}
+		if config.Listeners[i].RateLimits.ThrottleMinimumBandwidth != "" {
+			bytes, err := ParseBandwidth(config.Listeners[i].RateLimits.ThrottleMinimumBandwidth)
+			if err != nil {
+				return nil, fmt.Errorf("listener %s throttle_minimum: %w", config.Listeners[i].Name, err)
+			}
+			config.Listeners[i].RateLimits.throttleMinimumBytes = bytes
+		}
 	}
 
 	return &config, nil
@@ -116,6 +128,11 @@ func LoadConfig(path string) (*Config, error) {
 // GetMaxBandwidthBytes returns the parsed bandwidth value in bytes
 func (r *RateLimitConfig) GetMaxBandwidthBytes() int64 {
 	return r.maxBandwidthBytes
+}
+
+// GetThrottleMinimumBytes returns the parsed throttle minimum bandwidth in bytes
+func (r *RateLimitConfig) GetThrottleMinimumBytes() int64 {
+	return r.throttleMinimumBytes
 }
 
 // ParseBandwidth converts a bandwidth string (e.g., "10MB", "1GB", "500KB") to bytes

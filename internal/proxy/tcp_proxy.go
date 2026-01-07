@@ -190,12 +190,28 @@ func (p *TCPProxy) copyWithStats(dst, src net.Conn, counter *int64, clientIP str
 		nr, err := src.Read(buf)
 		if nr > 0 {
 			// Check bandwidth limit
-			if !p.rateLimiter.AllowBandwidth(clientIP, int64(nr)) {
-				p.logger.LogInfo("Connection dropped: bandwidth limit exceeded", map[string]interface{}{
-					"listener":  p.config.Name,
-					"client_ip": clientIP,
-					"bytes":     nr,
-				})
+			allowed := p.rateLimiter.AllowBandwidth(clientIP, int64(nr))
+
+			// Log if over limit (works for all modes)
+			if p.rateLimiter.IsBandwidthOverLimit(clientIP, int64(nr)) {
+				action := p.rateLimiter.GetAction()
+				if action == "log_only" {
+					p.logger.LogWarning("Bandwidth limit exceeded (log_only mode)", map[string]interface{}{
+						"listener":  p.config.Name,
+						"client_ip": clientIP,
+						"bytes":     nr,
+					})
+				} else if !allowed {
+					p.logger.LogInfo("Connection dropped: bandwidth limit exceeded", map[string]interface{}{
+						"listener":  p.config.Name,
+						"client_ip": clientIP,
+						"bytes":     nr,
+						"action":    action,
+					})
+				}
+			}
+
+			if !allowed {
 				p.metrics.RateLimitDrops.WithLabelValues(p.config.Name, "bandwidth_limit").Inc()
 				return written, fmt.Errorf("bandwidth limit exceeded")
 			}

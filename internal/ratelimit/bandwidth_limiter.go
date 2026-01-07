@@ -7,11 +7,13 @@ import (
 
 // BandwidthLimiter limits bandwidth per IP using a sliding window
 type BandwidthLimiter struct {
-	mu          sync.RWMutex
-	maxPerIP    int64 // bytes
-	window      time.Duration
-	buckets     map[string]*bandwidthBucket
-	stopCleanup chan struct{}
+	mu              sync.RWMutex
+	maxPerIP        int64 // bytes
+	throttleMinimum int64 // bytes - minimum bandwidth when throttling
+	window          time.Duration
+	buckets         map[string]*bandwidthBucket
+	stopCleanup     chan struct{}
+	action          string // drop, throttle, log_only
 }
 
 // bandwidthBucket tracks bandwidth consumption for an IP
@@ -27,12 +29,19 @@ type consumptionEntry struct {
 }
 
 // NewBandwidthLimiter creates a new bandwidth limiter
-func NewBandwidthLimiter(maxPerIP int64, window time.Duration) *BandwidthLimiter {
+func NewBandwidthLimiter(maxPerIP int64, window time.Duration, action string, throttleMinimum int64) *BandwidthLimiter {
+	// Default to "drop" if no action specified
+	if action == "" {
+		action = "drop"
+	}
+
 	limiter := &BandwidthLimiter{
-		maxPerIP:    maxPerIP,
-		window:      window,
-		buckets:     make(map[string]*bandwidthBucket),
-		stopCleanup: make(chan struct{}),
+		maxPerIP:        maxPerIP,
+		throttleMinimum: throttleMinimum,
+		window:          window,
+		buckets:         make(map[string]*bandwidthBucket),
+		stopCleanup:     make(chan struct{}),
+		action:          action,
 	}
 
 	// Start cleanup goroutine
@@ -42,6 +51,7 @@ func NewBandwidthLimiter(maxPerIP int64, window time.Duration) *BandwidthLimiter
 }
 
 // Allow checks if the bandwidth usage is within limits
+// Returns true if allowed, false if should be dropped
 func (l *BandwidthLimiter) Allow(ip string, bytes int64) bool {
 	if bytes == 0 {
 		return true
@@ -77,7 +87,28 @@ func (l *BandwidthLimiter) Allow(ip string, bytes int64) bool {
 
 	// Check if adding this would exceed the limit
 	if currentUsage+bytes > l.maxPerIP {
-		return false
+		// Handle based on action mode
+		switch l.action {
+		case "log_only":
+			// Log only mode: allow but log the violation
+			bucket.entries = append(bucket.entries, consumptionEntry{
+				bytes:     bytes,
+				timestamp: now,
+			})
+			return true
+		case "throttle":
+			// Throttle mode: allow only up to minimum bandwidth
+			if l.throttleMinimum > 0 && bytes <= l.throttleMinimum {
+				bucket.entries = append(bucket.entries, consumptionEntry{
+					bytes:     bytes,
+					timestamp: now,
+				})
+				return true
+			}
+			return false
+		default: // "drop"
+			return false
+		}
 	}
 
 	// Record the consumption
@@ -87,6 +118,37 @@ func (l *BandwidthLimiter) Allow(ip string, bytes int64) bool {
 	})
 
 	return true
+}
+
+// IsOverLimit checks if an IP is currently over its bandwidth limit
+// This is useful for logging violations in log_only mode
+func (l *BandwidthLimiter) IsOverLimit(ip string, bytes int64) bool {
+	if bytes == 0 {
+		return false
+	}
+
+	l.mu.RLock()
+	bucket, exists := l.buckets[ip]
+	l.mu.RUnlock()
+
+	if !exists {
+		return false
+	}
+
+	bucket.mu.Lock()
+	defer bucket.mu.Unlock()
+
+	now := time.Now()
+	cutoff := now.Add(-l.window)
+
+	var currentUsage int64
+	for _, entry := range bucket.entries {
+		if entry.timestamp.After(cutoff) {
+			currentUsage += entry.bytes
+		}
+	}
+
+	return currentUsage+bytes > l.maxPerIP
 }
 
 // cleanupLoop periodically removes expired buckets

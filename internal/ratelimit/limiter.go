@@ -9,9 +9,11 @@ import (
 // RateLimitManager manages all rate limiting for a listener
 type RateLimitManager struct {
 	connLimiter      *ConnectionLimiter
+	attemptLimiter   *AttemptLimiter
 	bandwidthLimiter *BandwidthLimiter
 	totalConns       int64
 	maxTotalConns    int64
+	action           string
 }
 
 // NewRateLimitManager creates a new rate limit manager
@@ -21,21 +23,45 @@ func NewRateLimitManager(cfg config.RateLimitConfig) *RateLimitManager {
 		connLimiter = NewConnectionLimiter(cfg.MaxConnectionsPerIP, cfg.ConnectionsWindow)
 	}
 
+	var attemptLimiter *AttemptLimiter
+	if cfg.MaxConnectionAttemptsPerIP > 0 && cfg.AttemptsWindow > 0 {
+		attemptLimiter = NewAttemptLimiter(cfg.MaxConnectionAttemptsPerIP, cfg.AttemptsWindow)
+	}
+
 	var bandwidthLimiter *BandwidthLimiter
 	if cfg.GetMaxBandwidthBytes() > 0 && cfg.BandwidthWindow > 0 {
-		bandwidthLimiter = NewBandwidthLimiter(cfg.GetMaxBandwidthBytes(), cfg.BandwidthWindow)
+		action := cfg.Action
+		if action == "" {
+			action = "drop" // default
+		}
+		bandwidthLimiter = NewBandwidthLimiter(
+			cfg.GetMaxBandwidthBytes(),
+			cfg.BandwidthWindow,
+			action,
+			cfg.GetThrottleMinimumBytes(),
+		)
 	}
 
 	return &RateLimitManager{
 		connLimiter:      connLimiter,
+		attemptLimiter:   attemptLimiter,
 		bandwidthLimiter: bandwidthLimiter,
 		maxTotalConns:    int64(cfg.MaxTotalConnections),
+		action:           cfg.Action,
 	}
 }
 
 // AllowConnection checks if a new connection from the given IP is allowed
 func (m *RateLimitManager) AllowConnection(ip string) bool {
-	// Check total connection limit first
+	// Check connection attempt limit first (tracks all attempts)
+	if m.attemptLimiter != nil {
+		if !m.attemptLimiter.RecordAttempt(ip) {
+			// Too many attempts - don't even check other limits
+			return false
+		}
+	}
+
+	// Check total connection limit
 	if !m.AllowTotalConnection() {
 		return false
 	}
@@ -58,6 +84,23 @@ func (m *RateLimitManager) AllowBandwidth(ip string, bytes int64) bool {
 		return m.bandwidthLimiter.Allow(ip, bytes)
 	}
 	return true
+}
+
+// IsBandwidthOverLimit checks if the IP would be over the bandwidth limit
+// Useful for logging violations in log_only mode
+func (m *RateLimitManager) IsBandwidthOverLimit(ip string, bytes int64) bool {
+	if m.bandwidthLimiter != nil {
+		return m.bandwidthLimiter.IsOverLimit(ip, bytes)
+	}
+	return false
+}
+
+// GetAction returns the configured action mode
+func (m *RateLimitManager) GetAction() string {
+	if m.action == "" {
+		return "drop"
+	}
+	return m.action
 }
 
 // AllowTotalConnection checks and increments the total connection counter
@@ -98,6 +141,9 @@ func (m *RateLimitManager) GetTotalConnections() int64 {
 func (m *RateLimitManager) Close() {
 	if m.connLimiter != nil {
 		m.connLimiter.Close()
+	}
+	if m.attemptLimiter != nil {
+		m.attemptLimiter.Close()
 	}
 	if m.bandwidthLimiter != nil {
 		m.bandwidthLimiter.Close()

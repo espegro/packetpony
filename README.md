@@ -7,10 +7,12 @@ PacketPony is a modern network proxy/forwarder service written in Go, inspired b
 - **Multi-protocol support**: TCP and UDP
 - **IPv4 and IPv6**: Full support for both IPv4 and IPv6
 - **Rate Limiting**:
-  - Max connections per IP per time window (configurable)
-  - Max bandwidth per IP per time window
+  - Max connections per IP per time window (active connections)
+  - Max connection attempts per IP per time window (including rejected)
+  - Max bandwidth per IP per time window (bidirectional for TCP and UDP)
   - Max total connections per listener
-  - Automatic connection dropping when limits exceeded
+  - Configurable actions: drop, throttle, or log_only
+  - Throttle mode: reduce to minimum bandwidth instead of dropping
 - **Access Control**: IP and CIDR-based allowlist per listener
 - **Logging**:
   - Syslog support (UDP/TCP/Unix)
@@ -123,9 +125,12 @@ listeners:
     rate_limits:
       max_connections_per_ip: 100
       connections_window: "1m"
+      max_connection_attempts_per_ip: 500
+      attempts_window: "1m"
       max_bandwidth_per_ip: "10MB"
       bandwidth_window: "1m"
       max_total_connections: 1000
+      action: "drop"
 ```
 
 ### Listener configuration
@@ -138,11 +143,15 @@ Each listener can be configured with:
 - **target_address**: IP:port to forward traffic to
 - **allowlist**: List of IP addresses and/or CIDR ranges
 - **rate_limits**:
-  - `max_connections_per_ip`: Max connections per IP
+  - `max_connections_per_ip`: Max active connections per IP
   - `connections_window`: Time window for connection counting (e.g., "1m", "30s")
+  - `max_connection_attempts_per_ip`: Max connection attempts (including rejected)
+  - `attempts_window`: Time window for attempt counting
   - `max_bandwidth_per_ip`: Max bandwidth per IP (e.g., "10MB", "1GB")
   - `bandwidth_window`: Time window for bandwidth measurement
   - `max_total_connections`: Max total connections for listener
+  - `action`: Action when limit exceeded: `drop`, `throttle`, or `log_only` (default: `drop`)
+  - `throttle_minimum`: Minimum bandwidth when throttling (required if action is `throttle`)
 
 ### TCP-specific settings
 
@@ -163,16 +172,43 @@ udp:
 
 ## Rate Limiting
 
-PacketPony uses a hybrid sliding window + token bucket approach:
+PacketPony uses a sliding window approach for rate limiting with multiple enforcement modes:
 
-- **Connection Limiting**: Sliding window log for accurate connection counting per IP
-- **Bandwidth Limiting**: Sliding window tracking of bytes consumed per IP
+### Limit Types
+
+- **Connection Limiting**: Tracks active (successful) connections per IP using a sliding window
+- **Attempt Limiting**: Tracks ALL connection attempts per IP, including rejected ones
+  - Protects against SYN flood and connection spam attacks
+  - Typically set higher than connection limit (e.g., 4-5x)
+- **Bandwidth Limiting**: Tracks bytes consumed per IP in a sliding window
+  - **TCP**: Bidirectional - counts both client→target and target→client
+  - **UDP**: Bidirectional - counts both inbound packets and return traffic
 - **Total Connection Limiting**: Atomic counter for total connections per listener
 
-When limits are exceeded:
-- Connection is dropped immediately
-- Event is logged
-- Metrics are updated
+### Action Modes
+
+Configure how rate limits are enforced using the `action` parameter:
+
+- **`drop` (default)**: Drop connection/packet immediately when limit exceeded
+  - Best for security and DoS protection
+  - Recommended for internet-facing services
+
+- **`throttle`**: Reduce bandwidth to configured minimum instead of dropping
+  - Requires `throttle_minimum` parameter (e.g., "1MB")
+  - Allows legitimate users to continue at reduced speed
+  - Good for internal services with occasional bursts
+
+- **`log_only`**: Allow all traffic but log violations
+  - Useful for testing and monitoring
+  - Helps determine appropriate limits before enforcement
+  - Does not drop any connections
+
+### Behavior
+
+- Dropped connections/packets do NOT count against quotas
+- Quotas reset via sliding window expiration
+- Active connections release quota immediately on close
+- Each listener has independent rate limits
 
 ## UDP Session Tracking
 
@@ -281,9 +317,9 @@ PacketPony exposes Prometheus metrics on the `/metrics` endpoint:
 
 ## Usage Examples
 
-### HTTP Proxy
+### HTTP Proxy with Drop Mode
 
-Proxying HTTP traffic with rate limiting:
+Proxying HTTP traffic with strict rate limiting:
 
 ```yaml
 listeners:
@@ -296,14 +332,41 @@ listeners:
     rate_limits:
       max_connections_per_ip: 50
       connections_window: "1m"
+      max_connection_attempts_per_ip: 200
+      attempts_window: "1m"
       max_bandwidth_per_ip: "10MB"
       bandwidth_window: "1m"
       max_total_connections: 500
+      action: "drop"  # Drop connections when limits exceeded
 ```
 
-### DNS Proxy
+### HTTPS Proxy with Throttle Mode
 
-UDP-based DNS proxying:
+Allow connections but throttle bandwidth when limits exceeded:
+
+```yaml
+listeners:
+  - name: "https-proxy"
+    protocol: "tcp"
+    listen_address: "0.0.0.0:8443"
+    target_address: "backend.example.com:443"
+    allowlist:
+      - "0.0.0.0/0"
+    rate_limits:
+      max_connections_per_ip: 50
+      connections_window: "30s"
+      max_connection_attempts_per_ip: 200
+      attempts_window: "30s"
+      max_bandwidth_per_ip: "50MB"
+      bandwidth_window: "1m"
+      max_total_connections: 500
+      action: "throttle"      # Throttle instead of drop
+      throttle_minimum: "5MB"  # Minimum bandwidth when throttling
+```
+
+### DNS Proxy with Log-Only Mode
+
+UDP-based DNS proxying with monitoring (no enforcement):
 
 ```yaml
 listeners:
@@ -316,15 +379,18 @@ listeners:
     rate_limits:
       max_connections_per_ip: 100
       connections_window: "10s"
+      max_connection_attempts_per_ip: 500
+      attempts_window: "10s"
       max_bandwidth_per_ip: "1MB"
       bandwidth_window: "10s"
       max_total_connections: 1000
+      action: "log_only"  # Log violations but don't enforce
     udp:
       session_timeout: "30s"
       buffer_size: 4096
 ```
 
-### SSH Proxy with strict rate limiting
+### SSH Proxy with Strict Rate Limiting
 
 ```yaml
 listeners:
@@ -337,7 +403,10 @@ listeners:
     rate_limits:
       max_connections_per_ip: 3
       connections_window: "5m"
+      max_connection_attempts_per_ip: 10  # Allow retries for auth failures
+      attempts_window: "5m"
       max_total_connections: 20
+      action: "drop"
 ```
 
 ## Signal Handling

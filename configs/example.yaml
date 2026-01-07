@@ -47,11 +47,15 @@ listeners:
 
     # Rate limiting configuration
     rate_limits:
-      max_connections_per_ip: 100      # Max concurrent connections per IP
-      connections_window: "1m"          # Time window for connection counting
-      max_bandwidth_per_ip: "10MB"     # Max bandwidth per IP per window
-      bandwidth_window: "1m"            # Time window for bandwidth measurement
-      max_total_connections: 1000       # Max total concurrent connections
+      max_connections_per_ip: 100           # Max concurrent connections per IP
+      connections_window: "1m"              # Time window for connection counting
+      max_connection_attempts_per_ip: 500   # Max connection attempts (including rejected)
+      attempts_window: "1m"                 # Time window for attempt counting
+      max_bandwidth_per_ip: "10MB"          # Max bandwidth per IP per window (bidirectional)
+      bandwidth_window: "1m"                # Time window for bandwidth measurement
+      max_total_connections: 1000           # Max total concurrent connections
+      action: "drop"                        # Action on rate limit: drop, throttle, log_only
+      # throttle_minimum: "1MB"             # Required if action is "throttle"
 
     # TCP-specific settings
     tcp:
@@ -71,9 +75,13 @@ listeners:
     rate_limits:
       max_connections_per_ip: 50
       connections_window: "30s"
+      max_connection_attempts_per_ip: 200
+      attempts_window: "30s"
       max_bandwidth_per_ip: "50MB"
       bandwidth_window: "1m"
       max_total_connections: 500
+      action: "throttle"                    # Throttle instead of drop
+      throttle_minimum: "5MB"               # Minimum bandwidth when throttling
 
     tcp:
       read_timeout: "60s"
@@ -93,9 +101,12 @@ listeners:
     rate_limits:
       max_connections_per_ip: 100       # Max concurrent sessions per IP
       connections_window: "10s"
+      max_connection_attempts_per_ip: 500
+      attempts_window: "10s"
       max_bandwidth_per_ip: "1MB"
       bandwidth_window: "10s"
       max_total_connections: 1000
+      action: "log_only"                # Log violations but don't enforce
 
     # UDP-specific settings
     udp:
@@ -116,9 +127,12 @@ listeners:
     rate_limits:
       max_connections_per_ip: 10
       connections_window: "5m"
+      max_connection_attempts_per_ip: 50
+      attempts_window: "5m"
       max_bandwidth_per_ip: "5MB"
       bandwidth_window: "1m"
       max_total_connections: 100
+      action: "drop"
 
     udp:
       session_timeout: "2m"
@@ -136,9 +150,12 @@ listeners:
     rate_limits:
       max_connections_per_ip: 3         # Limit SSH connections
       connections_window: "5m"
+      max_connection_attempts_per_ip: 10  # Allow some retries
+      attempts_window: "5m"
       max_bandwidth_per_ip: "100MB"
       bandwidth_window: "5m"
       max_total_connections: 20
+      action: "drop"
 
     tcp:
       read_timeout: "0s"    # 0 means no timeout
