@@ -1,5 +1,5 @@
 # Binaries
-packetpony
+/packetpony
 *.exe
 *.exe~
 *.dll

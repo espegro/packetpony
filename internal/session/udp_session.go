@@ -11,9 +11,9 @@ import (
 
 // SessionManager manages UDP sessions
 type SessionManager struct {
-	mu       sync.RWMutex
-	sessions map[string]*Session
-	timeout  time.Duration
+	mu          sync.RWMutex
+	sessions    map[string]*Session
+	timeout     time.Duration
 	stopCleanup chan struct{}
 }
 

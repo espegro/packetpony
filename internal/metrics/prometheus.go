@@ -11,14 +11,14 @@ import (
 
 // ProxyMetrics holds all Prometheus metrics for the proxy
 type ProxyMetrics struct {
-	ConnectionsTotal     *prometheus.CounterVec
-	ConnectionsActive    *prometheus.GaugeVec
-	BytesTransferred     *prometheus.CounterVec
-	PacketsTransferred   *prometheus.CounterVec
-	ConnectionDuration   *prometheus.HistogramVec
-	RateLimitDrops       *prometheus.CounterVec
-	ACLDrops             *prometheus.CounterVec
-	Errors               *prometheus.CounterVec
+	ConnectionsTotal   *prometheus.CounterVec
+	ConnectionsActive  *prometheus.GaugeVec
+	BytesTransferred   *prometheus.CounterVec
+	PacketsTransferred *prometheus.CounterVec
+	ConnectionDuration *prometheus.HistogramVec
+	RateLimitDrops     *prometheus.CounterVec
+	ACLDrops           *prometheus.CounterVec
+	Errors             *prometheus.CounterVec
 }
 
 // NewProxyMetrics creates and registers Prometheus metrics

@@ -45,13 +45,37 @@ packetpony/
 ```bash
 git clone https://github.com/espegro/packetpony.git
 cd packetpony
+
+# Build with make (recommended)
+make build
+
+# Or build with go directly
 go build -o packetpony ./cmd/packetpony
+```
+
+### Using the Makefile
+
+The project includes a comprehensive Makefile with many useful targets:
+
+```bash
+make help              # Show all available targets
+make build             # Build the binary
+make test              # Run tests with race detection
+make lint              # Run linters (requires golangci-lint)
+make install           # Install to /usr/local/bin
+make install-service   # Install as systemd service (requires root)
+make clean             # Remove build artifacts
+make release           # Build optimized release binary
+make cross-compile     # Build for multiple platforms
 ```
 
 ### Running
 
 ```bash
 ./packetpony -config configs/example.yaml
+
+# Or with make
+make run
 ```
 
 ### Running as a systemd service

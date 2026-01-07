@@ -62,12 +62,12 @@ type ListenerConfig struct {
 }
 
 type RateLimitConfig struct {
-	MaxConnectionsPerIP  int           `yaml:"max_connections_per_ip"`
-	ConnectionsWindow    time.Duration `yaml:"connections_window"`
-	MaxBandwidthPerIP    string        `yaml:"max_bandwidth_per_ip"`
-	BandwidthWindow      time.Duration `yaml:"bandwidth_window"`
-	MaxTotalConnections  int           `yaml:"max_total_connections"`
-	maxBandwidthBytes    int64         // parsed value
+	MaxConnectionsPerIP int           `yaml:"max_connections_per_ip"`
+	ConnectionsWindow   time.Duration `yaml:"connections_window"`
+	MaxBandwidthPerIP   string        `yaml:"max_bandwidth_per_ip"`
+	BandwidthWindow     time.Duration `yaml:"bandwidth_window"`
+	MaxTotalConnections int           `yaml:"max_total_connections"`
+	maxBandwidthBytes   int64         // parsed value
 }
 
 type TCPConfig struct {
