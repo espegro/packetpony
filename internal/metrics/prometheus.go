@@ -1,3 +1,6 @@
+// Package metrics provides Prometheus metrics collection and HTTP endpoints.
+// Includes metrics for connections, bandwidth, rate limits, ACL drops, and errors.
+// Also provides health check endpoints at /health, /healthz, and /ready.
 package metrics
 
 import (
@@ -96,13 +99,16 @@ func NewProxyMetrics() *ProxyMetrics {
 	return metrics
 }
 
-// StartMetricsServer starts the HTTP server for Prometheus metrics
+// StartMetricsServer starts the HTTP server for Prometheus metrics and health endpoint
 func StartMetricsServer(cfg config.PrometheusConfig) error {
 	if !cfg.Enabled {
 		return nil
 	}
 
 	http.Handle(cfg.Path, promhttp.Handler())
+	http.HandleFunc("/health", healthHandler)
+	http.HandleFunc("/healthz", healthHandler)
+	http.HandleFunc("/ready", healthHandler)
 
 	go func() {
 		if err := http.ListenAndServe(cfg.ListenAddress, nil); err != nil {
@@ -111,4 +117,11 @@ func StartMetricsServer(cfg config.PrometheusConfig) error {
 	}()
 
 	return nil
+}
+
+// healthHandler responds to health check requests
+func healthHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, `{"status":"healthy","service":"packetpony"}`)
 }

@@ -1,3 +1,5 @@
+// Package listener provides TCP and UDP listener management with lifecycle control.
+// The Manager coordinates multiple listeners and handles graceful shutdown.
 package listener
 
 import (

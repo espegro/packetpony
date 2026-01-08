@@ -1,3 +1,5 @@
+// Package ratelimit provides sliding window rate limiting for connections, attempts, and bandwidth.
+// Supports three action modes: drop (deny), throttle (reduce bandwidth), and log_only (monitor).
 package ratelimit
 
 import (

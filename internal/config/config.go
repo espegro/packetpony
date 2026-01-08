@@ -1,3 +1,5 @@
+// Package config provides configuration structures and parsing for PacketPony.
+// It supports YAML-based configuration with validation and sensible defaults.
 package config
 
 import (
@@ -11,6 +13,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Config represents the top-level configuration for PacketPony.
 type Config struct {
 	Server    ServerConfig     `yaml:"server"`
 	Logging   LoggingConfig    `yaml:"logging"`
@@ -18,21 +21,25 @@ type Config struct {
 	Listeners []ListenerConfig `yaml:"listeners"`
 }
 
+// ServerConfig contains server-level configuration options.
 type ServerConfig struct {
 	Name string `yaml:"name"`
 }
 
+// LoggingConfig defines logging backends and their configuration.
 type LoggingConfig struct {
 	Syslog SyslogConfig  `yaml:"syslog"`
 	JSONLog JSONLogConfig `yaml:"jsonlog"`
 	Stdout StdoutConfig  `yaml:"stdout"`
 }
 
+// StdoutConfig configures stdout logging (useful for systemd/journald).
 type StdoutConfig struct {
 	Enabled bool `yaml:"enabled"`
 	UseJSON bool `yaml:"use_json"`
 }
 
+// SyslogConfig configures syslog logging backend.
 type SyslogConfig struct {
 	Enabled  bool   `yaml:"enabled"`
 	Network  string `yaml:"network"`
@@ -41,21 +48,25 @@ type SyslogConfig struct {
 	Priority string `yaml:"priority"`
 }
 
+// JSONLogConfig configures JSON file logging.
 type JSONLogConfig struct {
 	Enabled bool   `yaml:"enabled"`
 	Path    string `yaml:"path"`
 }
 
+// MetricsConfig defines metrics collection and export configuration.
 type MetricsConfig struct {
 	Prometheus PrometheusConfig `yaml:"prometheus"`
 }
 
+// PrometheusConfig configures the Prometheus metrics endpoint.
 type PrometheusConfig struct {
 	Enabled       bool   `yaml:"enabled"`
 	ListenAddress string `yaml:"listen_address"`
 	Path          string `yaml:"path"`
 }
 
+// ListenerConfig defines a single listener (proxy endpoint) configuration.
 type ListenerConfig struct {
 	Name          string          `yaml:"name"`
 	Protocol      string          `yaml:"protocol"`
@@ -67,6 +78,8 @@ type ListenerConfig struct {
 	UDP           *UDPConfig      `yaml:"udp,omitempty"`
 }
 
+// RateLimitConfig defines rate limiting rules for connections and bandwidth.
+// Supports three actions: drop (reject), throttle (reduce bandwidth), or log_only.
 type RateLimitConfig struct {
 	MaxConnectionsPerIP        int           `yaml:"max_connections_per_ip"`
 	ConnectionsWindow          time.Duration `yaml:"connections_window"`
@@ -81,15 +94,31 @@ type RateLimitConfig struct {
 	throttleMinimumBytes       int64         // parsed value
 }
 
+// TCPConfig contains TCP-specific timeouts and options.
 type TCPConfig struct {
 	ReadTimeout  time.Duration `yaml:"read_timeout"`
 	WriteTimeout time.Duration `yaml:"write_timeout"`
 	IdleTimeout  time.Duration `yaml:"idle_timeout"`
 }
 
+// UDPConfig contains UDP-specific session management and logging options.
 type UDPConfig struct {
-	SessionTimeout time.Duration `yaml:"session_timeout"`
-	BufferSize     int           `yaml:"buffer_size"`
+	SessionTimeout time.Duration    `yaml:"session_timeout"`
+	BufferSize     int              `yaml:"buffer_size"`
+	Logging        *UDPLoggingConfig `yaml:"logging,omitempty"`
+}
+
+// UDPLoggingConfig controls how UDP sessions are logged.
+// Defaults: log start/close, periodic logs every 5m or 100MB, no minimum thresholds.
+type UDPLoggingConfig struct {
+	LogSessionStart       bool          `yaml:"log_session_start"`
+	LogSessionClose       bool          `yaml:"log_session_close"`
+	PeriodicLogInterval   time.Duration `yaml:"periodic_log_interval"`
+	PeriodicLogBytes      string        `yaml:"periodic_log_bytes"`
+	MinLogDuration        time.Duration `yaml:"min_log_duration"`
+	MinLogBytes           string        `yaml:"min_log_bytes"`
+	periodicLogBytesValue int64         // parsed value
+	minLogBytesValue      int64         // parsed value
 }
 
 // LoadConfig reads and parses the YAML configuration file
@@ -104,7 +133,7 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config YAML: %w", err)
 	}
 
-	// Parse bandwidth strings for each listener
+	// Parse bandwidth strings and set defaults for each listener
 	for i := range config.Listeners {
 		if config.Listeners[i].RateLimits.MaxBandwidthPerIP != "" {
 			bytes, err := ParseBandwidth(config.Listeners[i].RateLimits.MaxBandwidthPerIP)
@@ -120,6 +149,39 @@ func LoadConfig(path string) (*Config, error) {
 			}
 			config.Listeners[i].RateLimits.throttleMinimumBytes = bytes
 		}
+
+		// Set UDP logging defaults and parse bandwidth values
+		if config.Listeners[i].UDP != nil {
+			if config.Listeners[i].UDP.Logging == nil {
+				// Set defaults
+				config.Listeners[i].UDP.Logging = &UDPLoggingConfig{
+					LogSessionStart:     true,
+					LogSessionClose:     true,
+					PeriodicLogInterval: 5 * time.Minute,
+					PeriodicLogBytes:    "100MB",
+					MinLogDuration:      0,
+					MinLogBytes:         "",
+				}
+			}
+
+			// Parse periodic log bytes
+			if config.Listeners[i].UDP.Logging.PeriodicLogBytes != "" {
+				bytes, err := ParseBandwidth(config.Listeners[i].UDP.Logging.PeriodicLogBytes)
+				if err != nil {
+					return nil, fmt.Errorf("listener %s UDP logging periodic_log_bytes: %w", config.Listeners[i].Name, err)
+				}
+				config.Listeners[i].UDP.Logging.periodicLogBytesValue = bytes
+			}
+
+			// Parse min log bytes
+			if config.Listeners[i].UDP.Logging.MinLogBytes != "" && config.Listeners[i].UDP.Logging.MinLogBytes != "0" {
+				bytes, err := ParseBandwidth(config.Listeners[i].UDP.Logging.MinLogBytes)
+				if err != nil {
+					return nil, fmt.Errorf("listener %s UDP logging min_log_bytes: %w", config.Listeners[i].Name, err)
+				}
+				config.Listeners[i].UDP.Logging.minLogBytesValue = bytes
+			}
+		}
 	}
 
 	return &config, nil
@@ -133,6 +195,16 @@ func (r *RateLimitConfig) GetMaxBandwidthBytes() int64 {
 // GetThrottleMinimumBytes returns the parsed throttle minimum bandwidth in bytes
 func (r *RateLimitConfig) GetThrottleMinimumBytes() int64 {
 	return r.throttleMinimumBytes
+}
+
+// GetPeriodicLogBytes returns the parsed periodic log bytes value
+func (u *UDPLoggingConfig) GetPeriodicLogBytes() int64 {
+	return u.periodicLogBytesValue
+}
+
+// GetMinLogBytes returns the parsed minimum log bytes value
+func (u *UDPLoggingConfig) GetMinLogBytes() int64 {
+	return u.minLogBytesValue
 }
 
 // ParseBandwidth converts a bandwidth string (e.g., "10MB", "1GB", "500KB") to bytes

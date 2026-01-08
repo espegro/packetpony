@@ -1,3 +1,5 @@
+// Package logging provides multi-backend logging for connection events and application messages.
+// Supports syslog, JSON file logging, and stdout (with optional JSON format).
 package logging
 
 import (

@@ -1,3 +1,5 @@
+// Package acl provides IP-based access control lists (ACLs) for connections.
+// Supports both individual IP addresses and CIDR ranges for allowlisting.
 package acl
 
 import (

@@ -1,3 +1,4 @@
+// Package proxy implements TCP and UDP proxying with rate limiting, ACLs, and metrics.
 package proxy
 
 import (
@@ -12,7 +13,8 @@ import (
 	"github.com/espegro/packetpony/internal/session"
 )
 
-// UDPProxy handles UDP packet proxying with session tracking
+// UDPProxy handles UDP packet proxying with session tracking.
+// Sessions are maintained per source IP:port, enabling bidirectional communication.
 type UDPProxy struct {
 	config         *config.ListenerConfig
 	logger         logging.Logger
@@ -85,20 +87,20 @@ func (p *UDPProxy) HandlePacket(data []byte, srcAddr *net.UDPAddr, listenerConn 
 			return
 		}
 
-		// Parse target for logging
-		targetHost, targetPort, _ := net.SplitHostPort(p.config.TargetAddress)
-
-		// Log session open
-		p.logger.LogConnection(logging.ConnectionEvent{
-			Timestamp:    time.Now(),
-			ListenerName: p.config.Name,
-			Protocol:     "udp",
-			SourceIP:     clientIP,
-			SourcePort:   clientPort,
-			TargetIP:     targetHost,
-			TargetPort:   parsePort(targetPort),
-			EventType:    "open",
-		})
+		// Log session open if enabled
+		if p.config.UDP.Logging.LogSessionStart {
+			targetHost, targetPort, _ := net.SplitHostPort(p.config.TargetAddress)
+			p.logger.LogConnection(logging.ConnectionEvent{
+				Timestamp:    time.Now(),
+				ListenerName: p.config.Name,
+				Protocol:     "udp",
+				SourceIP:     clientIP,
+				SourcePort:   clientPort,
+				TargetIP:     targetHost,
+				TargetPort:   parsePort(targetPort),
+				EventType:    "open",
+			})
+		}
 
 		p.metrics.ConnectionsTotal.WithLabelValues(p.config.Name, "udp", "accepted").Inc()
 		p.metrics.ConnectionsActive.WithLabelValues(p.config.Name, "udp").Inc()
@@ -232,6 +234,12 @@ func (p *UDPProxy) startSessionReader(sess *session.Session, listenerConn *net.U
 			sess.UpdateActivity()
 			p.metrics.BytesTransferred.WithLabelValues(p.config.Name, "received").Add(float64(n))
 			p.metrics.PacketsTransferred.WithLabelValues(p.config.Name, "received").Inc()
+
+			// Check if we should log periodic update
+			if sess.ShouldLogPeriodic(p.config.UDP.Logging.PeriodicLogInterval, p.config.UDP.Logging.GetPeriodicLogBytes()) {
+				p.logSessionUpdate(sess)
+				sess.UpdatePeriodicLog()
+			}
 		}
 	}
 }
@@ -253,15 +261,57 @@ func (p *UDPProxy) cleanupSession(sess *session.Session) {
 
 	// Get final stats
 	bytesSent, bytesReceived, packetsSent, packetsReceived := sess.GetStats()
+	totalBytes := bytesSent + bytesReceived
+	createdAt := sess.GetCreatedAt()
+	duration := time.Since(createdAt)
 
-	// Parse target for logging
+	// Check if we should log this session close based on thresholds
+	shouldLog := p.config.UDP.Logging.LogSessionClose
+	if shouldLog {
+		minBytes := p.config.UDP.Logging.GetMinLogBytes()
+		minDuration := p.config.UDP.Logging.MinLogDuration
+
+		// Skip logging if session doesn't meet minimum thresholds
+		if minBytes > 0 && totalBytes < minBytes {
+			shouldLog = false
+		}
+		if minDuration > 0 && duration < minDuration {
+			shouldLog = false
+		}
+	}
+
+	// Log session close if enabled and meets thresholds
+	if shouldLog {
+		targetHost, targetPort, _ := net.SplitHostPort(p.config.TargetAddress)
+		p.logger.LogConnection(logging.ConnectionEvent{
+			Timestamp:       time.Now(),
+			ListenerName:    p.config.Name,
+			Protocol:        "udp",
+			SourceIP:        sess.SourceAddr.IP.String(),
+			SourcePort:      sess.SourceAddr.Port,
+			TargetIP:        targetHost,
+			TargetPort:      parsePort(targetPort),
+			EventType:       "close",
+			BytesSent:       bytesSent,
+			BytesReceived:   bytesReceived,
+			PacketsSent:     packetsSent,
+			PacketsReceived: packetsReceived,
+			Duration:        duration.Milliseconds(),
+		})
+	}
+
+	p.metrics.ConnectionsActive.WithLabelValues(p.config.Name, "udp").Dec()
+	p.metrics.ConnectionDuration.WithLabelValues(p.config.Name, "udp").Observe(duration.Seconds())
+}
+
+// logSessionUpdate logs a periodic update for an active UDP session
+func (p *UDPProxy) logSessionUpdate(sess *session.Session) {
+	bytesSent, bytesReceived, packetsSent, packetsReceived := sess.GetStats()
+	createdAt := sess.GetCreatedAt()
+	duration := time.Since(createdAt)
+
 	targetHost, targetPort, _ := net.SplitHostPort(p.config.TargetAddress)
 
-	// Calculate duration
-	lastActivity := sess.GetLastActivity()
-	duration := time.Since(lastActivity)
-
-	// Log session close
 	p.logger.LogConnection(logging.ConnectionEvent{
 		Timestamp:       time.Now(),
 		ListenerName:    p.config.Name,
@@ -270,14 +320,11 @@ func (p *UDPProxy) cleanupSession(sess *session.Session) {
 		SourcePort:      sess.SourceAddr.Port,
 		TargetIP:        targetHost,
 		TargetPort:      parsePort(targetPort),
-		EventType:       "close",
+		EventType:       "update",
 		BytesSent:       bytesSent,
 		BytesReceived:   bytesReceived,
 		PacketsSent:     packetsSent,
 		PacketsReceived: packetsReceived,
 		Duration:        duration.Milliseconds(),
 	})
-
-	p.metrics.ConnectionsActive.WithLabelValues(p.config.Name, "udp").Dec()
-	p.metrics.ConnectionDuration.WithLabelValues(p.config.Name, "udp").Observe(duration.Seconds())
 }

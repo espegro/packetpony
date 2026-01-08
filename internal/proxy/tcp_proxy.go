@@ -1,3 +1,4 @@
+// Package proxy implements TCP and UDP proxying with rate limiting, ACLs, and metrics.
 package proxy
 
 import (
@@ -14,7 +15,7 @@ import (
 	"github.com/espegro/packetpony/internal/ratelimit"
 )
 
-// TCPProxy handles TCP connection proxying
+// TCPProxy handles TCP connection proxying with rate limiting and access control.
 type TCPProxy struct {
 	config      *config.ListenerConfig
 	logger      logging.Logger

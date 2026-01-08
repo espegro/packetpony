@@ -1,3 +1,5 @@
+// Package session provides UDP session tracking and management.
+// Sessions are identified by source IP:port and maintain bidirectional communication state.
 package session
 
 import (
@@ -19,17 +21,20 @@ type SessionManager struct {
 
 // Session represents a UDP session
 type Session struct {
-	ID              string
-	SourceAddr      *net.UDPAddr
-	TargetConn      *net.UDPConn
-	LastActivity    time.Time
-	BytesSent       int64
-	BytesReceived   int64
-	PacketsSent     int64
-	PacketsReceived int64
-	ctx             context.Context
-	cancel          context.CancelFunc
-	mu              sync.Mutex
+	ID                   string
+	SourceAddr           *net.UDPAddr
+	TargetConn           *net.UDPConn
+	LastActivity         time.Time
+	BytesSent            int64
+	BytesReceived        int64
+	PacketsSent          int64
+	PacketsReceived      int64
+	CreatedAt            time.Time
+	LastPeriodicLog      time.Time
+	LastPeriodicLogBytes int64
+	ctx                  context.Context
+	cancel               context.CancelFunc
+	mu                   sync.Mutex
 }
 
 // NewSessionManager creates a new session manager
@@ -84,14 +89,18 @@ func (m *SessionManager) GetOrCreate(srcAddr *net.UDPAddr, targetAddr string) (*
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	now := time.Now()
 
 	session = &Session{
-		ID:           key,
-		SourceAddr:   srcAddr,
-		TargetConn:   udpConn,
-		LastActivity: time.Now(),
-		ctx:          ctx,
-		cancel:       cancel,
+		ID:                   key,
+		SourceAddr:           srcAddr,
+		TargetConn:           udpConn,
+		LastActivity:         now,
+		CreatedAt:            now,
+		LastPeriodicLog:      now,
+		LastPeriodicLogBytes: 0,
+		ctx:                  ctx,
+		cancel:               cancel,
 	}
 
 	m.sessions[key] = session
@@ -223,6 +232,43 @@ func (s *Session) GetLastActivity() time.Time {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.LastActivity
+}
+
+// ShouldLogPeriodic checks if we should log based on time or bytes thresholds
+func (s *Session) ShouldLogPeriodic(intervalDuration time.Duration, intervalBytes int64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now()
+	totalBytes := atomic.LoadInt64(&s.BytesSent) + atomic.LoadInt64(&s.BytesReceived)
+
+	// Check time-based threshold
+	if intervalDuration > 0 && now.Sub(s.LastPeriodicLog) >= intervalDuration {
+		return true
+	}
+
+	// Check bytes-based threshold
+	if intervalBytes > 0 && (totalBytes-s.LastPeriodicLogBytes) >= intervalBytes {
+		return true
+	}
+
+	return false
+}
+
+// UpdatePeriodicLog updates the periodic logging tracking fields
+func (s *Session) UpdatePeriodicLog() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.LastPeriodicLog = time.Now()
+	s.LastPeriodicLogBytes = atomic.LoadInt64(&s.BytesSent) + atomic.LoadInt64(&s.BytesReceived)
+}
+
+// GetCreatedAt returns the session creation time safely
+func (s *Session) GetCreatedAt() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.CreatedAt
 }
 
 // sessionKey generates a unique key for a UDP session
