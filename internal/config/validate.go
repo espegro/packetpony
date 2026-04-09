@@ -249,6 +249,15 @@ func (t *TCPConfig) Validate() error {
 	if t.IdleTimeout < 0 {
 		return fmt.Errorf("idle_timeout must be non-negative")
 	}
+	if t.DialTimeout < 0 {
+		return fmt.Errorf("dial_timeout must be non-negative")
+	}
+	if t.CopyBufferSize < 0 {
+		return fmt.Errorf("copy_buffer_size must be non-negative")
+	}
+	if t.CopyBufferSize > 1024*1024 {
+		return fmt.Errorf("copy_buffer_size must not exceed 1MB")
+	}
 	return nil
 }
 

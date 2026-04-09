@@ -23,14 +23,15 @@ type Config struct {
 
 // ServerConfig contains server-level configuration options.
 type ServerConfig struct {
-	Name string `yaml:"name"`
+	Name            string        `yaml:"name"`
+	ShutdownTimeout time.Duration `yaml:"shutdown_timeout"` // Graceful shutdown timeout (default: 30s)
 }
 
 // LoggingConfig defines logging backends and their configuration.
 type LoggingConfig struct {
-	Syslog SyslogConfig  `yaml:"syslog"`
+	Syslog  SyslogConfig  `yaml:"syslog"`
 	JSONLog JSONLogConfig `yaml:"jsonlog"`
-	Stdout StdoutConfig  `yaml:"stdout"`
+	Stdout  StdoutConfig  `yaml:"stdout"`
 }
 
 // StdoutConfig configures stdout logging (useful for systemd/journald).
@@ -96,15 +97,17 @@ type RateLimitConfig struct {
 
 // TCPConfig contains TCP-specific timeouts and options.
 type TCPConfig struct {
-	ReadTimeout  time.Duration `yaml:"read_timeout"`
-	WriteTimeout time.Duration `yaml:"write_timeout"`
-	IdleTimeout  time.Duration `yaml:"idle_timeout"`
+	ReadTimeout    time.Duration `yaml:"read_timeout"`
+	WriteTimeout   time.Duration `yaml:"write_timeout"`
+	IdleTimeout    time.Duration `yaml:"idle_timeout"`
+	DialTimeout    time.Duration `yaml:"dial_timeout"`     // Target connection timeout (default: 10s)
+	CopyBufferSize int           `yaml:"copy_buffer_size"` // Buffer size for io.Copy (default: 32KB)
 }
 
 // UDPConfig contains UDP-specific session management and logging options.
 type UDPConfig struct {
-	SessionTimeout time.Duration    `yaml:"session_timeout"`
-	BufferSize     int              `yaml:"buffer_size"`
+	SessionTimeout time.Duration     `yaml:"session_timeout"`
+	BufferSize     int               `yaml:"buffer_size"`
 	Logging        *UDPLoggingConfig `yaml:"logging,omitempty"`
 }
 
@@ -133,6 +136,11 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config YAML: %w", err)
 	}
 
+	// Set server defaults
+	if config.Server.ShutdownTimeout == 0 {
+		config.Server.ShutdownTimeout = 30 * time.Second
+	}
+
 	// Parse bandwidth strings and set defaults for each listener
 	for i := range config.Listeners {
 		if config.Listeners[i].RateLimits.MaxBandwidthPerIP != "" {
@@ -148,6 +156,16 @@ func LoadConfig(path string) (*Config, error) {
 				return nil, fmt.Errorf("listener %s throttle_minimum: %w", config.Listeners[i].Name, err)
 			}
 			config.Listeners[i].RateLimits.throttleMinimumBytes = bytes
+		}
+
+		// Set TCP defaults
+		if config.Listeners[i].TCP != nil {
+			if config.Listeners[i].TCP.DialTimeout == 0 {
+				config.Listeners[i].TCP.DialTimeout = 10 * time.Second
+			}
+			if config.Listeners[i].TCP.CopyBufferSize == 0 {
+				config.Listeners[i].TCP.CopyBufferSize = 32 * 1024 // 32KB
+			}
 		}
 
 		// Set UDP logging defaults and parse bandwidth values

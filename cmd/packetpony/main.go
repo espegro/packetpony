@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/espegro/packetpony/internal/config"
 	"github.com/espegro/packetpony/internal/listener"
@@ -23,7 +22,6 @@ var (
 
 const (
 	defaultConfigPath = "/etc/packetpony/config.yaml"
-	shutdownTimeout   = 30 * time.Second
 )
 
 func main() {
@@ -117,8 +115,8 @@ func main() {
 		"signal": sig.String(),
 	})
 
-	// Graceful shutdown
-	if err := manager.GracefulShutdown(shutdownTimeout); err != nil {
+	// Graceful shutdown with configured timeout
+	if err := manager.GracefulShutdown(cfg.Server.ShutdownTimeout); err != nil {
 		logger.LogError("Error during graceful shutdown", map[string]interface{}{
 			"error": err.Error(),
 		})

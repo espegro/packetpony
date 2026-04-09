@@ -212,6 +212,7 @@ PacketPony uses YAML for configuration. See `configs/example.yaml` for a complet
 ```yaml
 server:
   name: "packetpony-01"
+  shutdown_timeout: "30s"  # Optional: graceful shutdown timeout (default: 30s)
 
 logging:
   syslog:
@@ -245,6 +246,16 @@ listeners:
       action: "drop"
 ```
 
+### Server configuration
+
+Server-level settings that apply globally:
+
+- **name**: Server name (required) - used in logs and metrics
+- **shutdown_timeout**: Maximum time to wait for active connections during graceful shutdown (default: `30s`)
+  - Active connections are forcefully closed after this timeout
+  - Increase for services with long-lived connections
+  - Format: duration string (e.g., `30s`, `1m`, `90s`)
+
 ### Listener configuration
 
 Each listener can be configured with:
@@ -269,9 +280,11 @@ Each listener can be configured with:
 
 ```yaml
 tcp:
-  read_timeout: "30s"
-  write_timeout: "30s"
-  idle_timeout: "5m"
+  read_timeout: "30s"      # Timeout for reading from connection (0 = no timeout)
+  write_timeout: "30s"     # Timeout for writing to connection (0 = no timeout)
+  idle_timeout: "5m"       # Idle timeout for inactive connections (0 = no timeout)
+  dial_timeout: "10s"      # Timeout for connecting to target (default: 10s)
+  copy_buffer_size: 32768  # Buffer size for proxying in bytes (default: 32KB, max: 1MB)
 ```
 
 ### UDP-specific settings
@@ -1465,9 +1478,12 @@ PacketPony supports graceful shutdown:
 
 On shutdown:
 1. Stop accepting new connections
-2. Wait for active connections to complete (max 30s)
-3. Flush logs and metrics
-4. Exit
+2. Wait for active connections to complete (configurable via `server.shutdown_timeout`, default: 30s)
+3. Close any remaining connections after timeout
+4. Flush logs and metrics
+5. Exit
+
+**Note:** Active TCP connections are forcefully closed when the context is cancelled, ensuring shutdown completes within the configured timeout.
 
 ## Performance
 
@@ -1478,6 +1494,37 @@ PacketPony is designed for performance:
 - **Inline UDP handling**: Packets are handled inline (no goroutine per packet)
 - **Fine-grained locking**: Per-IP locking in rate limiters for minimal contention
 - **Periodic cleanup**: Batch cleanup of rate limit maps
+- **Configurable buffers**: Tune `copy_buffer_size` for your workload (larger = better throughput for high-bandwidth)
+
+### Performance Tuning
+
+For high-throughput scenarios, consider these settings:
+
+```yaml
+server:
+  shutdown_timeout: "60s"  # Allow more time for long-lived connections
+
+listeners:
+  - name: "high-throughput-proxy"
+    protocol: "tcp"
+    tcp:
+      dial_timeout: "5s"        # Faster target connection timeout
+      copy_buffer_size: 131072  # 128KB buffer for high bandwidth
+      idle_timeout: "10m"       # Keep connections alive longer
+```
+
+For low-latency scenarios:
+
+```yaml
+listeners:
+  - name: "low-latency-proxy"
+    protocol: "tcp"
+    tcp:
+      dial_timeout: "2s"       # Quick timeout for fast failure
+      copy_buffer_size: 16384  # 16KB buffer for lower latency
+      read_timeout: "5s"
+      write_timeout: "5s"
+```
 
 ## Security
 

@@ -16,16 +16,16 @@ import (
 
 // TCPListener manages a TCP listening socket and handles connections
 type TCPListener struct {
-	config         *config.ListenerConfig
-	listener       net.Listener
-	proxy          *proxy.TCPProxy
-	logger         logging.Logger
-	ctx            context.Context
-	cancel         context.CancelFunc
-	wg             sync.WaitGroup
-	rateLimiter    *ratelimit.RateLimitManager
-	activeConnsMu  sync.Mutex
-	activeConns    []net.Conn
+	config        *config.ListenerConfig
+	listener      net.Listener
+	proxy         *proxy.TCPProxy
+	logger        logging.Logger
+	ctx           context.Context
+	cancel        context.CancelFunc
+	wg            sync.WaitGroup
+	rateLimiter   *ratelimit.RateLimitManager
+	activeConnsMu sync.Mutex
+	activeConns   []net.Conn
 }
 
 // NewTCPListener creates a new TCP listener
@@ -176,7 +176,7 @@ func (l *TCPListener) acceptLoop() {
 		go func(c net.Conn) {
 			defer l.wg.Done()
 			defer l.untrackConnection(c)
-			l.proxy.HandleConnection(c)
+			l.proxy.HandleConnection(l.ctx, c)
 		}(conn)
 	}
 }

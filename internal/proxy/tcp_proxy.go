@@ -2,6 +2,7 @@
 package proxy
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -48,8 +49,8 @@ func NewTCPProxy(
 	}
 }
 
-// HandleConnection handles a single TCP connection
-func (p *TCPProxy) HandleConnection(clientConn net.Conn) {
+// HandleConnection handles a single TCP connection with context for cancellation
+func (p *TCPProxy) HandleConnection(ctx context.Context, clientConn net.Conn) {
 	defer clientConn.Close()
 
 	stats := &connStats{
@@ -112,8 +113,12 @@ func (p *TCPProxy) HandleConnection(clientConn net.Conn) {
 	p.metrics.ConnectionsActive.WithLabelValues(p.config.Name, "tcp").Inc()
 	defer p.metrics.ConnectionsActive.WithLabelValues(p.config.Name, "tcp").Dec()
 
-	// Connect to target
-	targetConn, err := net.DialTimeout("tcp", p.config.TargetAddress, 10*time.Second)
+	// Connect to target with configured timeout
+	dialTimeout := 10 * time.Second // default
+	if p.config.TCP != nil && p.config.TCP.DialTimeout > 0 {
+		dialTimeout = p.config.TCP.DialTimeout
+	}
+	targetConn, err := net.DialTimeout("tcp", p.config.TargetAddress, dialTimeout)
 	if err != nil {
 		p.logger.LogError("Failed to connect to target", map[string]interface{}{
 			"listener": p.config.Name,
@@ -138,8 +143,16 @@ func (p *TCPProxy) HandleConnection(clientConn net.Conn) {
 		}
 	}
 
-	// Bidirectional copy
+	// Bidirectional copy with context monitoring
 	errChan := make(chan error, 2)
+
+	// Monitor context and close connections on cancel
+	go func() {
+		<-ctx.Done()
+		// Force connections to close, which will terminate ongoing io operations
+		clientConn.Close()
+		targetConn.Close()
+	}()
 
 	// Client to target
 	go func() {
@@ -184,7 +197,12 @@ func (p *TCPProxy) HandleConnection(clientConn net.Conn) {
 
 // copyWithStats copies data and tracks bandwidth limits
 func (p *TCPProxy) copyWithStats(dst, src net.Conn, counter *int64, clientIP string) (int64, error) {
-	buf := make([]byte, 32*1024)
+	// Use configured buffer size or default to 32KB
+	bufSize := 32 * 1024
+	if p.config.TCP != nil && p.config.TCP.CopyBufferSize > 0 {
+		bufSize = p.config.TCP.CopyBufferSize
+	}
+	buf := make([]byte, bufSize)
 	var written int64
 
 	for {
@@ -266,13 +284,18 @@ func (p *TCPProxy) logConnectionClose(clientIP string, clientPort int, targetIP 
 	})
 }
 
-// parsePort converts a port string to int
+// parsePort converts a port string to int, returning 0 if parsing fails
 func parsePort(portStr string) int {
-	_, port, err := net.SplitHostPort(":" + portStr)
+	// portStr is already just the port number from net.SplitHostPort
+	// Use standard library for robust parsing
+	var p int
+	_, err := fmt.Sscanf(portStr, "%d", &p)
 	if err != nil {
+		// Return 0 for invalid ports (will be visible in logs as port 0)
 		return 0
 	}
-	var p int
-	fmt.Sscanf(port, "%d", &p)
+	if p < 0 || p > 65535 {
+		return 0
+	}
 	return p
 }
