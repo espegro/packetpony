@@ -1,0 +1,127 @@
+project_name: packetpony
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - id: packetpony
+    main: ./cmd/packetpony
+    binary: packetpony
+
+    env:
+      - CGO_ENABLED=0
+
+    goos:
+      - linux
+      - darwin
+      - windows
+      - freebsd
+
+    goarch:
+      - amd64
+      - arm64
+      - arm
+
+    goarm:
+      - "6"
+      - "7"
+
+    ignore:
+      - goos: windows
+        goarch: arm
+      - goos: windows
+        goarch: arm64
+      - goos: darwin
+        goarch: arm
+
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.buildTime={{.Date}}
+
+archives:
+  - id: default
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+
+    format_overrides:
+      - goos: windows
+        format: zip
+
+    files:
+      - LICENSE
+      - README.md
+      - TESTING.md
+      - configs/example.yaml
+      - deployment/systemd/*.service
+      - deployment/systemd/README.md
+
+checksum:
+  name_template: 'checksums.txt'
+
+snapshot:
+  name_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - Merge pull request
+      - Merge branch
+  groups:
+    - title: 'Features'
+      regexp: '^feat.*:.*$'
+      order: 0
+    - title: 'Bug Fixes'
+      regexp: '^fix.*:.*$'
+      order: 1
+    - title: 'Performance Improvements'
+      regexp: '^perf.*:.*$'
+      order: 2
+    - title: 'Other Changes'
+      order: 999
+
+release:
+  github:
+    owner: espegro
+    name: packetpony
+
+  prerelease: auto
+
+  name_template: "{{.ProjectName}} v{{.Version}}"
+
+  footer: |
+    ## Installation
+
+    ### Linux
+    ```bash
+    wget https://github.com/espegro/packetpony/releases/download/{{ .Tag }}/packetpony_{{ .Version }}_Linux_x86_64.tar.gz
+    tar xzf packetpony_{{ .Version }}_Linux_x86_64.tar.gz
+    sudo mv packetpony /usr/local/bin/
+    ```
+
+    ### macOS
+    ```bash
+    wget https://github.com/espegro/packetpony/releases/download/{{ .Tag }}/packetpony_{{ .Version }}_Darwin_x86_64.tar.gz
+    tar xzf packetpony_{{ .Version }}_Darwin_x86_64.tar.gz
+    sudo mv packetpony /usr/local/bin/
+    ```
+
+    ### Windows
+    Download the `.zip` file for your architecture and extract.
+
+    ---
+
+    **Full Changelog**: https://github.com/espegro/packetpony/compare/{{ .PreviousTag }}...{{ .Tag }}
