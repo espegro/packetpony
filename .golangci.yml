@@ -1,0 +1,58 @@
+run:
+  timeout: 5m
+  tests: true
+  modules-download-mode: readonly
+
+linters:
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gofmt
+    - goimports
+    - misspell
+    - revive
+    - gosec
+
+linters-settings:
+  errcheck:
+    check-blank: false
+    check-type-assertions: false
+    ignore: fmt:.*,io/ioutil:^Read.*
+    exclude-functions:
+      # Logging functions - errors are logged internally
+      - (*log/syslog.Writer).Info
+      - (*log/syslog.Writer).Warning
+      - (*log/syslog.Writer).Err
+      - (*log/syslog.Writer).Debug
+      # JSON encoder - errors are logged internally in our code
+      - (*encoding/json.Encoder).Encode
+      # Deadline setters - failures are not critical
+      - (net.Conn).SetReadDeadline
+      - (net.Conn).SetWriteDeadline
+      - (*net.TCPConn).SetReadDeadline
+      - (*net.TCPConn).SetWriteDeadline
+      - (*net.UDPConn).SetReadDeadline
+      - (*net.UDPConn).SetWriteDeadline
+
+  gosec:
+    excludes:
+      - G115 # Integer overflow conversion - we validate inputs
+
+  revive:
+    rules:
+      - name: var-naming
+        disabled: true
+
+issues:
+  exclude-use-default: false
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+output:
+  format: colored-line-number
+  print-issued-lines: true
+  print-linter-name: true
