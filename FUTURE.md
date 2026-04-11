@@ -357,6 +357,136 @@ Implement when:
 
 ---
 
+## ⏸️ macOS launchd Service Support (Wait for Demand)
+
+**Status:** Development/testing use case only  
+**Complexity:** 🟡 Medium  
+**Value:** Low (macOS is not a production deployment target)
+
+### Current Situation
+
+PacketPony builds for macOS (both Intel and Apple Silicon):
+- ✅ Binaries available in releases
+- ✅ Syslog works (uses `log/syslog` package)
+- ✅ Can run directly: `sudo packetpony -config config.yaml`
+
+**What's missing:**
+- No launchd service configuration
+- No macOS deployment guide
+- No Homebrew formula
+
+### Typical macOS Use Cases
+
+**Development/Testing:** ✅ Supported
+```bash
+# Download binary
+wget https://github.com/espegro/packetpony/releases/download/v1.0.0/packetpony_1.0.0_Darwin_arm64.tar.gz
+tar xzf packetpony_1.0.0_Darwin_arm64.tar.gz
+sudo mv packetpony /usr/local/bin/
+
+# Run in foreground (perfect for testing)
+sudo packetpony -config config.yaml
+
+# Run in background
+nohup sudo packetpony -config config.yaml > packetpony.log 2>&1 &
+```
+
+**Production Deployment:** ❌ Not recommended
+- Production servers run Linux (systemd)
+- Docker/Kubernetes deployments are Linux-based
+- macOS Server is rare (desktop OS, not server OS)
+
+### What Could Be Added
+
+**Option 1: Minimal Documentation** (~30 minutes)
+
+Create `deployment/macos/README.md` with:
+- Download and installation steps
+- Running in foreground/background
+- Basic troubleshooting
+- Note: "For production, use Linux"
+
+**Option 2: launchd Service** (~2-3 hours)
+
+Create launchd plist file:
+```xml
+<!-- /Library/LaunchDaemons/com.packetpony.plist -->
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.packetpony</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/packetpony</string>
+        <string>-config</string>
+        <string>/usr/local/etc/packetpony/config.yaml</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/usr/local/var/log/packetpony/stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/usr/local/var/log/packetpony/stderr.log</string>
+</dict>
+</plist>
+```
+
+With install/uninstall scripts and documentation.
+
+**Option 3: Homebrew Formula** (~1 day + maintenance)
+
+Create Homebrew tap with formula for easy installation:
+```bash
+brew install packetpony
+brew services start packetpony
+```
+
+Requires:
+- Homebrew tap repository
+- Formula maintenance
+- CI for Homebrew testing
+- Ongoing version updates
+
+### Why Wait
+
+1. **macOS is primarily for development/testing**
+   - Direct execution is sufficient
+   - No need for service management in dev environments
+
+2. **Production deployments are Linux-based**
+   - Docker containers (Linux)
+   - Kubernetes clusters (Linux)
+   - Cloud VMs (Linux)
+   - On-premises servers (Linux)
+
+3. **Current solution works**
+   - Binary downloads work
+   - Can run directly without service wrapper
+   - Background execution available via nohup/screen
+
+4. **Low demand**
+   - No requests for macOS service support
+   - Network proxies are typically server-side tools
+   - macOS Server market is tiny
+
+### When to Implement
+
+Consider implementing when:
+- Multiple users request macOS service support
+- Production deployments on macOS Server emerge
+- macOS becomes a common development platform for contributors
+
+**Recommendation:**
+- Skip service support for now
+- Current binary downloads are sufficient for testing/development
+- Production users should deploy on Linux
+
+---
+
 ## 🟢 Enhancements Worth Considering (Low Effort)
 
 These are small improvements that could be added easily if requested:
