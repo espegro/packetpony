@@ -37,6 +37,10 @@ linters-settings:
       - (*net.TCPConn).SetWriteDeadline
       - (*net.UDPConn).SetReadDeadline
       - (*net.UDPConn).SetWriteDeadline
+      # Connection closers - errors in defer/cleanup not actionable
+      - (net.Conn).Close
+      - (*net.TCPConn).Close
+      - (*net.UDPConn).Close
 
   gosec:
     excludes:
