@@ -192,15 +192,26 @@ make cross-compile     # Build for multiple platforms
 make run
 ```
 
-### Running as a systemd service
+### Running as a systemd service (Linux)
 
-For production deployments, see the [systemd deployment guide](deployment/systemd/README.md) for instructions on running PacketPony as a system service with automatic startup, logging, and monitoring.
+For production deployments on Linux, see the [systemd deployment guide](deployment/systemd/README.md) for instructions on running PacketPony as a system service with automatic startup, logging, and monitoring.
 
 Quick setup:
 ```bash
 sudo cp deployment/systemd/packetpony.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now packetpony
+```
+
+### Running as a Windows service
+
+For Windows deployments, see the [Windows deployment guide](deployment/windows/README.md) with NSSM-based service installation, PowerShell automation scripts, and complete setup instructions.
+
+Quick setup:
+```powershell
+# Download and run installation script as Administrator
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/espegro/packetpony/main/deployment/windows/install.ps1" -OutFile install.ps1
+.\install.ps1
 ```
 
 ## Configuration
