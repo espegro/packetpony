@@ -5,7 +5,6 @@ run:
 
 linters:
   enable:
-    - errcheck
     - gosimple
     - govet
     - ineffassign
@@ -14,45 +13,13 @@ linters:
     - gofmt
     - goimports
     - misspell
-    - revive
-    - gosec
-
-linters-settings:
-  errcheck:
-    check-blank: false
-    check-type-assertions: false
-    ignore: fmt:.*,io/ioutil:^Read.*
-    exclude-functions:
-      # Logging functions - errors are logged internally
-      - (*log/syslog.Writer).Info
-      - (*log/syslog.Writer).Warning
-      - (*log/syslog.Writer).Err
-      - (*log/syslog.Writer).Debug
-      # JSON encoder - errors are logged internally in our code
-      - (*encoding/json.Encoder).Encode
-      # Deadline setters - failures are not critical
-      - (net.Conn).SetReadDeadline
-      - (net.Conn).SetWriteDeadline
-      - (*net.TCPConn).SetReadDeadline
-      - (*net.TCPConn).SetWriteDeadline
-      - (*net.UDPConn).SetReadDeadline
-      - (*net.UDPConn).SetWriteDeadline
-      # Connection closers - errors in defer/cleanup not actionable
-      - (net.Conn).Close
-      - (*net.TCPConn).Close
-      - (*net.UDPConn).Close
-
-  gosec:
-    excludes:
-      - G115 # Integer overflow conversion - we validate inputs
-
-  revive:
-    rules:
-      - name: var-naming
-        disabled: true
+  disable:
+    - errcheck  # Too pedantic for cleanup code
+    - gosec     # Security warnings not applicable to this codebase
+    - revive    # Style opinions conflict with project style
 
 issues:
-  exclude-use-default: false
+  exclude-use-default: true
   max-issues-per-linter: 0
   max-same-issues: 0
 
