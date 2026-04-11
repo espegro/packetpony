@@ -51,10 +51,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Printf("PacketPony v%s starting with config: %s\n", version, *configPath)
-	fmt.Printf("Server name: %s\n", cfg.Server.Name)
-
-	// Setup logging
+	// Setup logging early so we can use it for all subsequent messages
 	logger, err := logging.NewMultiLogger(cfg.Logging)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to initialize logging: %v\n", err)
@@ -62,15 +59,17 @@ func main() {
 	}
 	defer logger.Close()
 
+	// Log startup messages via logger (not fmt.Printf)
 	logger.LogInfo("PacketPony starting", map[string]interface{}{
 		"version": version,
+		"commit":  commit,
 		"server":  cfg.Server.Name,
 		"config":  *configPath,
 	})
 
 	// Setup metrics
 	proxyMetrics := metrics.NewProxyMetrics()
-	if err := metrics.StartMetricsServer(cfg.Metrics.Prometheus); err != nil {
+	if err := metrics.StartMetricsServer(cfg.Metrics.Prometheus, logger); err != nil {
 		logger.LogError("Failed to start metrics server", map[string]interface{}{
 			"error": err.Error(),
 		})

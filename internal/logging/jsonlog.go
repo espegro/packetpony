@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
 )
 
 // JSONLogger implements logging to a JSON file
@@ -35,7 +36,12 @@ func (j *JSONLogger) LogConnection(event ConnectionEvent) {
 	defer j.mu.Unlock()
 
 	if err := j.encoder.Encode(event); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to write connection event to JSON log: %v\n", err)
+		// Fallback to structured stderr logging when JSON logger fails
+		logToStderr("ERROR", "Failed to write connection event to JSON log", map[string]interface{}{
+			"error":    err.Error(),
+			"listener": event.ListenerName,
+			"protocol": event.Protocol,
+		})
 	}
 }
 
@@ -77,6 +83,24 @@ func (j *JSONLogger) logMessage(level, msg string, fields map[string]interface{}
 	}
 
 	if err := j.encoder.Encode(logEntry); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to write log message to JSON log: %v\n", err)
+		// Fallback to structured stderr logging when JSON logger fails
+		logToStderr("ERROR", "Failed to write log message to JSON log", map[string]interface{}{
+			"error":          err.Error(),
+			"original_msg":   msg,
+			"original_level": level,
+		})
 	}
+}
+
+// logToStderr writes a structured log message to stderr as a fallback
+// This is used when the primary logger fails to avoid infinite recursion
+func logToStderr(level, msg string, fields map[string]interface{}) {
+	formatted := fmt.Sprintf("[%s] [%s] %s", time.Now().Format("2006-01-02 15:04:05"), level, msg)
+	if len(fields) > 0 {
+		formatted += " "
+		for key, value := range fields {
+			formatted += fmt.Sprintf("%s=%v ", key, value)
+		}
+	}
+	fmt.Fprintln(os.Stderr, formatted)
 }

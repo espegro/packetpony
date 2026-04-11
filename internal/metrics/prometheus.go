@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/espegro/packetpony/internal/config"
+	"github.com/espegro/packetpony/internal/logging"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -100,7 +101,7 @@ func NewProxyMetrics() *ProxyMetrics {
 }
 
 // StartMetricsServer starts the HTTP server for Prometheus metrics and health endpoint
-func StartMetricsServer(cfg config.PrometheusConfig) error {
+func StartMetricsServer(cfg config.PrometheusConfig, logger logging.Logger) error {
 	if !cfg.Enabled {
 		return nil
 	}
@@ -112,7 +113,10 @@ func StartMetricsServer(cfg config.PrometheusConfig) error {
 
 	go func() {
 		if err := http.ListenAndServe(cfg.ListenAddress, nil); err != nil {
-			fmt.Printf("Failed to start metrics server: %v\n", err)
+			logger.LogError("Failed to start metrics server", map[string]interface{}{
+				"error":   err.Error(),
+				"address": cfg.ListenAddress,
+			})
 		}
 	}()
 
