@@ -1584,6 +1584,8 @@ Contributions are welcome! Please:
 4. Push to the branch
 5. Open a Pull Request
 
+Before implementing new features, please check [FUTURE.md](FUTURE.md) for planned enhancements and project philosophy. For significant changes, open an issue first to discuss the design.
+
 ## Support
 
 For bugs and feature requests, please open an issue on GitHub.
