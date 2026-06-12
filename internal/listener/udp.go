@@ -27,6 +27,9 @@ type UDPListener struct {
 	cancel         context.CancelFunc
 	wg             sync.WaitGroup
 	rateLimiter    *ratelimit.RateLimitManager
+	stopOnce       sync.Once
+	sessionOnce    sync.Once
+	cleanupOnce    sync.Once
 }
 
 // NewUDPListener creates a new UDP listener
@@ -102,28 +105,58 @@ func (l *UDPListener) Stop() error {
 		"listener": l.config.Name,
 	})
 
-	// Cancel context to signal shutdown
-	l.cancel()
-
-	// Close connection to stop reading
-	if l.conn != nil {
-		l.conn.Close()
+	if err := l.Drain(); err != nil {
+		return err
 	}
-
-	// Close session manager
-	l.sessionManager.Close()
-
-	// Close rate limiter cleanup goroutines
-	l.rateLimiter.Close()
-
-	// Wait for read loop to finish
-	l.wg.Wait()
+	if err := l.Wait(); err != nil {
+		return err
+	}
 
 	l.logger.LogInfo("UDP listener stopped", map[string]interface{}{
 		"listener": l.config.Name,
 	})
 
 	return nil
+}
+
+// Drain stops receiving new datagrams and closes active UDP sessions.
+func (l *UDPListener) Drain() error {
+	l.stopReading()
+	l.wg.Wait()
+	l.closeSessions()
+	return nil
+}
+
+// Wait blocks until all UDP session readers have finished.
+func (l *UDPListener) Wait() error {
+	l.proxy.Wait()
+	l.closeRateLimiter()
+	return nil
+}
+
+// ForceStop closes UDP I/O and waits for all session readers to finish.
+func (l *UDPListener) ForceStop() error {
+	l.cancel()
+	if err := l.Drain(); err != nil {
+		return err
+	}
+	return l.Wait()
+}
+
+func (l *UDPListener) stopReading() {
+	l.stopOnce.Do(func() {
+		if l.conn != nil {
+			l.conn.Close()
+		}
+	})
+}
+
+func (l *UDPListener) closeSessions() {
+	l.sessionOnce.Do(l.sessionManager.Close)
+}
+
+func (l *UDPListener) closeRateLimiter() {
+	l.cleanupOnce.Do(l.rateLimiter.Close)
 }
 
 // Name returns the listener name

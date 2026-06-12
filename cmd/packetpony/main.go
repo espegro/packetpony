@@ -4,8 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"os/signal"
-	"syscall"
 
 	"github.com/espegro/packetpony/internal/config"
 	"github.com/espegro/packetpony/internal/listener"
@@ -27,6 +25,7 @@ const (
 func main() {
 	// Parse command-line flags
 	configPath := flag.String("config", defaultConfigPath, "path to configuration file")
+	configDir := flag.String("config-dir", "", "listener fragment directory (default: config.d next to the main config)")
 	showVersion := flag.Bool("version", false, "show version and exit")
 	flag.Parse()
 
@@ -39,7 +38,14 @@ func main() {
 	}
 
 	// Load configuration
-	cfg, err := config.LoadConfig(*configPath)
+	loadConfig := func() (*config.Config, error) {
+		if *configDir != "" {
+			return config.LoadConfigWithDir(*configPath, *configDir)
+		}
+		return config.LoadConfig(*configPath)
+	}
+
+	cfg, err := loadConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
 		os.Exit(1)
@@ -100,25 +106,55 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Setup signal handling for graceful shutdown
+	// Setup signal handling for reload and graceful shutdown.
 	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	notifySignals(sigChan)
 
 	logger.LogInfo("PacketPony is running", map[string]interface{}{
 		"listeners": len(cfg.Listeners),
 	})
 
-	// Wait for shutdown signal
-	sig := <-sigChan
-	logger.LogInfo("Received shutdown signal", map[string]interface{}{
-		"signal": sig.String(),
-	})
+	for {
+		sig := <-sigChan
+		if isReloadSignal(sig) {
+			logger.LogInfo("Received configuration reload signal", map[string]interface{}{
+				"signal": sig.String(),
+			})
 
-	// Graceful shutdown with configured timeout
-	if err := manager.GracefulShutdown(cfg.Server.ShutdownTimeout); err != nil {
-		logger.LogError("Error during graceful shutdown", map[string]interface{}{
-			"error": err.Error(),
+			nextConfig, loadErr := loadConfig()
+			if loadErr != nil {
+				logger.LogError("Configuration reload failed", map[string]interface{}{"error": loadErr.Error()})
+				continue
+			}
+			if validateErr := nextConfig.Validate(); validateErr != nil {
+				logger.LogError("Reloaded configuration is invalid", map[string]interface{}{"error": validateErr.Error()})
+				continue
+			}
+			if compatibilityErr := config.ValidateReload(cfg, nextConfig); compatibilityErr != nil {
+				logger.LogError("Configuration reload requires restart", map[string]interface{}{"error": compatibilityErr.Error()})
+				continue
+			}
+			if reloadErr := manager.Reload(nextConfig); reloadErr != nil {
+				logger.LogError("Configuration reload failed", map[string]interface{}{"error": reloadErr.Error()})
+				continue
+			}
+
+			cfg = nextConfig
+			logger.LogInfo("Configuration reloaded successfully", map[string]interface{}{
+				"listeners": len(cfg.Listeners),
+			})
+			continue
+		}
+
+		logger.LogInfo("Received shutdown signal", map[string]interface{}{
+			"signal": sig.String(),
 		})
+		break
+	}
+
+	// Graceful shutdown with the most recently loaded timeout.
+	if err := manager.GracefulShutdown(cfg.Server.ShutdownTimeout); err != nil {
+		logger.LogError("Error during graceful shutdown", map[string]interface{}{"error": err.Error()})
 		os.Exit(1)
 	}
 

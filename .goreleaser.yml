@@ -62,6 +62,7 @@ archives:
       - README.md
       - TESTING.md
       - configs/example.yaml
+      - configs/config.d.example/*.yaml
       - deployment/systemd/*.service
       - deployment/systemd/README.md
 

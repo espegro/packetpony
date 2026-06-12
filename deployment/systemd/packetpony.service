@@ -11,6 +11,7 @@ Group=packetpony
 
 # Paths
 ExecStart=/usr/local/bin/packetpony -config /etc/packetpony/config.yaml
+ExecReload=/bin/kill -HUP $MAINPID
 WorkingDirectory=/var/lib/packetpony
 
 # Runtime directory for logs (if using file logging)

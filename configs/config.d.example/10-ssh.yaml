@@ -1,0 +1,21 @@
+# Single-listener fragment.
+name: "ssh-proxy"
+protocol: "tcp"
+listen_address: "0.0.0.0:2222"
+target_address: "192.168.1.10:22"
+
+allowlist:
+  - "192.168.1.0/24"
+
+rate_limits:
+  max_connections_per_ip: 3
+  connections_window: "5m"
+  max_connection_attempts_per_ip: 10
+  attempts_window: "5m"
+  max_total_connections: 20
+  action: "drop"
+
+tcp:
+  idle_timeout: "30m"
+  dial_timeout: "10s"
+  copy_buffer_size: 32768

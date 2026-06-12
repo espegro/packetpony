@@ -64,6 +64,7 @@ if (-not (Test-Path "$ConfigPath\config.yaml")) {
     Write-Host "[4/8] Configuration exists, skipping..." -ForegroundColor Green
     Write-Host "  Using existing: $ConfigPath\config.yaml" -ForegroundColor Gray
 }
+New-Item -ItemType Directory -Force -Path "$ConfigPath\config.d" | Out-Null
 
 # Install NSSM
 if (-not $SkipNSSM) {

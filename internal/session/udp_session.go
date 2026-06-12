@@ -17,6 +17,8 @@ type SessionManager struct {
 	sessions    map[string]*Session
 	timeout     time.Duration
 	stopCleanup chan struct{}
+	closeOnce   sync.Once
+	onRemove    func(*Session)
 }
 
 // Session represents a UDP session
@@ -35,6 +37,7 @@ type Session struct {
 	ctx                  context.Context
 	cancel               context.CancelFunc
 	mu                   sync.Mutex
+	admitted             atomic.Bool
 }
 
 // NewSessionManager creates a new session manager
@@ -49,6 +52,13 @@ func NewSessionManager(timeout time.Duration) *SessionManager {
 	go manager.cleanupLoop()
 
 	return manager
+}
+
+// SetRemoveHandler sets a callback invoked once whenever a session is removed.
+func (m *SessionManager) SetRemoveHandler(handler func(*Session)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onRemove = handler
 }
 
 // GetOrCreate gets an existing session or creates a new one
@@ -126,15 +136,21 @@ func (m *SessionManager) Get(srcAddr *net.UDPAddr) (*Session, bool) {
 // Remove removes a session from the manager
 func (m *SessionManager) Remove(sessionID string) *Session {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	session, exists := m.sessions[sessionID]
 	if !exists {
+		m.mu.Unlock()
 		return nil
 	}
 
 	delete(m.sessions, sessionID)
+	handler := m.onRemove
+	m.mu.Unlock()
+
 	session.cancel()
+	session.TargetConn.Close()
+	if handler != nil {
+		handler(session)
+	}
 
 	return session
 }
@@ -156,35 +172,48 @@ func (m *SessionManager) cleanupLoop() {
 
 // cleanup removes expired sessions
 func (m *SessionManager) cleanup() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	now := time.Now()
-	for key, session := range m.sessions {
-		session.mu.Lock()
-		lastActivity := session.LastActivity
-		session.mu.Unlock()
+	var expired []string
 
-		if now.Sub(lastActivity) > m.timeout {
-			delete(m.sessions, key)
-			session.cancel()
-			session.TargetConn.Close()
+	m.mu.RLock()
+	for key, session := range m.sessions {
+		if now.Sub(session.GetLastActivity()) > m.timeout {
+			expired = append(expired, key)
 		}
+	}
+	m.mu.RUnlock()
+
+	for _, key := range expired {
+		m.Remove(key)
 	}
 }
 
 // Close closes all sessions and stops the cleanup goroutine
 func (m *SessionManager) Close() {
-	close(m.stopCleanup)
+	m.closeOnce.Do(func() {
+		close(m.stopCleanup)
+	})
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	for _, session := range m.sessions {
-		session.cancel()
-		session.TargetConn.Close()
+	m.mu.RLock()
+	sessionIDs := make([]string, 0, len(m.sessions))
+	for sessionID := range m.sessions {
+		sessionIDs = append(sessionIDs, sessionID)
 	}
-	m.sessions = make(map[string]*Session)
+	m.mu.RUnlock()
+
+	for _, sessionID := range sessionIDs {
+		m.Remove(sessionID)
+	}
+}
+
+// MarkAdmitted records that the session consumed connection-limit capacity.
+func (s *Session) MarkAdmitted() {
+	s.admitted.Store(true)
+}
+
+// IsAdmitted reports whether the session consumed connection-limit capacity.
+func (s *Session) IsAdmitted() bool {
+	return s.admitted.Load()
 }
 
 // UpdateActivity updates the last activity timestamp

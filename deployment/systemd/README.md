@@ -12,6 +12,7 @@ sudo useradd -r -s /bin/false -d /var/lib/packetpony packetpony
 
 # Create directories
 sudo mkdir -p /etc/packetpony
+sudo mkdir -p /etc/packetpony/config.d
 sudo mkdir -p /var/lib/packetpony
 sudo mkdir -p /var/log/packetpony
 
@@ -31,6 +32,11 @@ sudo install -m 755 packetpony /usr/local/bin/packetpony
 sudo cp configs/example.yaml /etc/packetpony/config.yaml
 sudo chown root:packetpony /etc/packetpony/config.yaml
 sudo chmod 640 /etc/packetpony/config.yaml
+
+# Optional: install example listener fragments
+sudo cp configs/config.d.example/*.yaml /etc/packetpony/config.d/
+sudo chown root:packetpony /etc/packetpony/config.d/*.yaml
+sudo chmod 640 /etc/packetpony/config.d/*.yaml
 
 # Edit configuration as needed
 sudo nano /etc/packetpony/config.yaml
@@ -83,7 +89,7 @@ sudo systemctl stop packetpony
 # Restart
 sudo systemctl restart packetpony
 
-# Reload configuration (requires app support)
+# Reload configuration without restarting established TCP connections
 sudo systemctl reload packetpony
 
 # Check status
@@ -98,6 +104,14 @@ curl http://localhost:9090/metrics
 ```
 
 ## Configuration Notes
+
+Listener fragments can be placed in `/etc/packetpony/config.d/*.yaml`. Files are
+loaded in lexical filename order, and later definitions replace earlier
+listeners with the same `name`. Replacement applies to the complete listener;
+fields are not merged individually.
+
+The main file contains `server`, `logging`, and `metrics`. Fragment files contain
+one listener directly or a `listeners:` list.
 
 ### Privileged Ports
 
@@ -140,15 +154,15 @@ Adjust `RestartSec`, `StartLimitInterval`, and `StartLimitBurst` as needed.
 
 ## Updating Configuration
 
-After changing `/etc/packetpony/config.yaml`:
+After changing `/etc/packetpony/config.yaml` or a file in `config.d`:
 
 ```bash
-# Validate configuration (run as packetpony user)
-sudo -u packetpony /usr/local/bin/packetpony -config /etc/packetpony/config.yaml &
-# Press Ctrl+C immediately if it starts successfully
+# Reload configuration
+sudo systemctl reload packetpony
 
-# Restart service
-sudo systemctl restart packetpony
+# Confirm success. Invalid configuration is rejected without replacing the
+# currently active runtime configuration.
+sudo journalctl -u packetpony -n 30 --no-pager
 ```
 
 ## Upgrading PacketPony

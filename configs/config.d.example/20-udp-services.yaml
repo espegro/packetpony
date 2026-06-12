@@ -1,0 +1,22 @@
+# A fragment may also define multiple listeners.
+listeners:
+  - name: "dns-proxy"
+    protocol: "udp"
+    listen_address: "0.0.0.0:5353"
+    target_address: "8.8.8.8:53"
+
+    allowlist:
+      - "0.0.0.0/0"
+      - "::/0"
+
+    rate_limits:
+      max_connections_per_ip: 100
+      connections_window: "10s"
+      max_bandwidth_per_ip: "1MB"
+      bandwidth_window: "10s"
+      max_total_connections: 1000
+      action: "log_only"
+
+    udp:
+      session_timeout: "30s"
+      buffer_size: 4096

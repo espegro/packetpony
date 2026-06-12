@@ -9,6 +9,8 @@ PacketPony has comprehensive unit tests for critical components:
 - **Config** - Configuration parsing, validation, and bandwidth string parsing
 - **ACL** - IP/CIDR allowlist matching (100% coverage)
 - **Rate Limiting** - Connection and bandwidth limiting logic
+- **Listener lifecycle** - Graceful TCP drain and connection-preserving reload
+- **UDP sessions** - Expiry, connection closure, and one-time cleanup
 - **Benchmarks** - Performance tests for hot paths
 
 ## Running Tests
@@ -43,6 +45,8 @@ Current coverage by package:
 | `internal/acl` | **100%** | IP/CIDR matching, IPv4/IPv6 support |
 | `internal/config` | **74.2%** | Bandwidth parsing, validation, config loading |
 | `internal/ratelimit` | **55.6%** | Connection limits, bandwidth limits, sliding windows |
+| `internal/listener` | Integration coverage | Graceful drain and TCP reload behavior |
+| `internal/session` | Lifecycle coverage | Expiry, close, and removal callbacks |
 
 ## Test Structure
 
@@ -53,6 +57,8 @@ Current coverage by package:
 - Config file loading from YAML
 - Default value handling
 - UDP logging configuration
+- Ordered `config.d` fragments and listener overrides
+- Repository example configuration validation
 - Error cases (invalid YAML, missing files)
 
 **`validate_test.go`**:
@@ -196,16 +202,12 @@ Tests can be integrated into CI pipelines:
 
 ## Known Gaps
 
-The following components have **no tests yet** (0% coverage):
+The following components still lack focused coverage:
 
-- `cmd/packetpony` - Main entry point
-- `internal/listener` - Listener management
+- `cmd/packetpony` - Signal loop and process-level reload behavior
 - `internal/logging` - Log backends
-- `internal/metrics` - Prometheus metrics
-- `internal/proxy` - TCP/UDP proxying
-- `internal/session` - UDP session tracking
-
-These would benefit from integration tests.
+- `internal/metrics` - HTTP server lifecycle
+- `internal/proxy` - Broader TCP/UDP error-path integration tests
 
 ## Test Data
 

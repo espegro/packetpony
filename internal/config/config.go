@@ -3,9 +3,13 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"os"
+	"path/filepath"
+	"reflect"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -124,8 +128,14 @@ type UDPLoggingConfig struct {
 	minLogBytesValue      int64         // parsed value
 }
 
-// LoadConfig reads and parses the YAML configuration file
+// LoadConfig reads the main YAML configuration and an optional sibling config.d directory.
 func LoadConfig(path string) (*Config, error) {
+	return LoadConfigWithDir(path, filepath.Join(filepath.Dir(path), "config.d"))
+}
+
+// LoadConfigWithDir reads the main YAML configuration and listener fragments from configDir.
+// Missing config directories are ignored. Fragment files are applied in lexical filename order.
+func LoadConfigWithDir(path, configDir string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
@@ -136,6 +146,121 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config YAML: %w", err)
 	}
 
+	if err := loadListenerFragments(&config, configDir); err != nil {
+		return nil, err
+	}
+
+	if err := applyDefaults(&config); err != nil {
+		return nil, err
+	}
+
+	return &config, nil
+}
+
+func loadListenerFragments(config *Config, configDir string) error {
+	if configDir == "" {
+		return nil
+	}
+
+	entries, err := os.ReadDir(configDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to read config directory %s: %w", configDir, err)
+	}
+
+	var paths []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		extension := strings.ToLower(filepath.Ext(entry.Name()))
+		if extension == ".yaml" || extension == ".yml" {
+			paths = append(paths, filepath.Join(configDir, entry.Name()))
+		}
+	}
+	sort.Strings(paths)
+
+	listenerIndexes := make(map[string]int, len(config.Listeners))
+	for i := range config.Listeners {
+		if config.Listeners[i].Name != "" {
+			listenerIndexes[config.Listeners[i].Name] = i
+		}
+	}
+
+	for _, fragmentPath := range paths {
+		listeners, err := readListenerFragment(fragmentPath)
+		if err != nil {
+			return err
+		}
+		for _, listener := range listeners {
+			if listener.Name == "" {
+				return fmt.Errorf("config fragment %s: listener name is required", fragmentPath)
+			}
+			if index, exists := listenerIndexes[listener.Name]; exists {
+				config.Listeners[index] = listener
+				continue
+			}
+			listenerIndexes[listener.Name] = len(config.Listeners)
+			config.Listeners = append(config.Listeners, listener)
+		}
+	}
+
+	return nil
+}
+
+func readListenerFragment(path string) ([]ListenerConfig, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read config fragment %s: %w", path, err)
+	}
+
+	var root yaml.Node
+	if err := yaml.Unmarshal(data, &root); err != nil {
+		return nil, fmt.Errorf("failed to parse config fragment %s: %w", path, err)
+	}
+	if len(root.Content) == 0 || root.Content[0].Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("config fragment %s must contain a YAML mapping", path)
+	}
+
+	mapping := root.Content[0]
+	if mappingHasKey(mapping, "listeners") {
+		var fragment struct {
+			Listeners []ListenerConfig `yaml:"listeners"`
+		}
+		if err := decodeKnownFields(data, &fragment); err != nil {
+			return nil, fmt.Errorf("failed to parse config fragment %s: %w", path, err)
+		}
+		if len(fragment.Listeners) == 0 {
+			return nil, fmt.Errorf("config fragment %s contains no listeners", path)
+		}
+		return fragment.Listeners, nil
+	}
+
+	var listener ListenerConfig
+	if err := decodeKnownFields(data, &listener); err != nil {
+		return nil, fmt.Errorf("failed to parse config fragment %s: %w", path, err)
+	}
+	return []ListenerConfig{listener}, nil
+}
+
+func mappingHasKey(mapping *yaml.Node, key string) bool {
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		if mapping.Content[i].Value == key {
+			return true
+		}
+	}
+	return false
+}
+
+func decodeKnownFields(data []byte, value interface{}) error {
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	return decoder.Decode(value)
+}
+
+func applyDefaults(config *Config) error {
 	// Set server defaults
 	if config.Server.ShutdownTimeout == 0 {
 		config.Server.ShutdownTimeout = 30 * time.Second
@@ -143,17 +268,19 @@ func LoadConfig(path string) (*Config, error) {
 
 	// Parse bandwidth strings and set defaults for each listener
 	for i := range config.Listeners {
+		listener := &config.Listeners[i]
+
 		if config.Listeners[i].RateLimits.MaxBandwidthPerIP != "" {
 			bytes, err := ParseBandwidth(config.Listeners[i].RateLimits.MaxBandwidthPerIP)
 			if err != nil {
-				return nil, fmt.Errorf("listener %s: %w", config.Listeners[i].Name, err)
+				return fmt.Errorf("listener %s: %w", config.Listeners[i].Name, err)
 			}
 			config.Listeners[i].RateLimits.maxBandwidthBytes = bytes
 		}
 		if config.Listeners[i].RateLimits.ThrottleMinimumBandwidth != "" {
 			bytes, err := ParseBandwidth(config.Listeners[i].RateLimits.ThrottleMinimumBandwidth)
 			if err != nil {
-				return nil, fmt.Errorf("listener %s throttle_minimum: %w", config.Listeners[i].Name, err)
+				return fmt.Errorf("listener %s throttle_minimum: %w", config.Listeners[i].Name, err)
 			}
 			config.Listeners[i].RateLimits.throttleMinimumBytes = bytes
 		}
@@ -168,8 +295,21 @@ func LoadConfig(path string) (*Config, error) {
 			}
 		}
 
+		// Set UDP defaults even when the optional udp block is omitted.
+		if strings.EqualFold(listener.Protocol, "udp") {
+			if listener.UDP == nil {
+				listener.UDP = &UDPConfig{}
+			}
+			if listener.UDP.SessionTimeout == 0 {
+				listener.UDP.SessionTimeout = 30 * time.Second
+			}
+			if listener.UDP.BufferSize == 0 {
+				listener.UDP.BufferSize = 4096
+			}
+		}
+
 		// Set UDP logging defaults and parse bandwidth values
-		if config.Listeners[i].UDP != nil {
+		if listener.UDP != nil {
 			if config.Listeners[i].UDP.Logging == nil {
 				// Set defaults
 				config.Listeners[i].UDP.Logging = &UDPLoggingConfig{
@@ -186,7 +326,7 @@ func LoadConfig(path string) (*Config, error) {
 			if config.Listeners[i].UDP.Logging.PeriodicLogBytes != "" {
 				bytes, err := ParseBandwidth(config.Listeners[i].UDP.Logging.PeriodicLogBytes)
 				if err != nil {
-					return nil, fmt.Errorf("listener %s UDP logging periodic_log_bytes: %w", config.Listeners[i].Name, err)
+					return fmt.Errorf("listener %s UDP logging periodic_log_bytes: %w", config.Listeners[i].Name, err)
 				}
 				config.Listeners[i].UDP.Logging.periodicLogBytesValue = bytes
 			}
@@ -195,14 +335,28 @@ func LoadConfig(path string) (*Config, error) {
 			if config.Listeners[i].UDP.Logging.MinLogBytes != "" && config.Listeners[i].UDP.Logging.MinLogBytes != "0" {
 				bytes, err := ParseBandwidth(config.Listeners[i].UDP.Logging.MinLogBytes)
 				if err != nil {
-					return nil, fmt.Errorf("listener %s UDP logging min_log_bytes: %w", config.Listeners[i].Name, err)
+					return fmt.Errorf("listener %s UDP logging min_log_bytes: %w", config.Listeners[i].Name, err)
 				}
 				config.Listeners[i].UDP.Logging.minLogBytesValue = bytes
 			}
 		}
 	}
 
-	return &config, nil
+	return nil
+}
+
+// ValidateReload rejects process-wide changes that require a restart.
+func ValidateReload(current, next *Config) error {
+	if current.Server.Name != next.Server.Name {
+		return fmt.Errorf("server.name cannot be changed during reload")
+	}
+	if !reflect.DeepEqual(current.Logging, next.Logging) {
+		return fmt.Errorf("logging configuration cannot be changed during reload")
+	}
+	if !reflect.DeepEqual(current.Metrics, next.Metrics) {
+		return fmt.Errorf("metrics configuration cannot be changed during reload")
+	}
+	return nil
 }
 
 // GetMaxBandwidthBytes returns the parsed bandwidth value in bytes

@@ -283,6 +283,55 @@ listeners:
 	}
 }
 
+func TestLoadConfig_UDPDefaultsWithoutUDPBlock(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "test-config.yaml")
+
+	configContent := `
+server:
+  name: "test-server"
+logging:
+  stdout:
+    enabled: true
+metrics:
+  prometheus:
+    enabled: false
+listeners:
+  - name: "test-udp"
+    protocol: "udp"
+    listen_address: "127.0.0.1:5353"
+    target_address: "127.0.0.1:53"
+    allowlist:
+      - "127.0.0.1"
+`
+
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("Failed to write test config: %v", err)
+	}
+
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+
+	udp := cfg.Listeners[0].UDP
+	if udp == nil {
+		t.Fatal("UDP config should be initialized")
+	}
+	if udp.SessionTimeout != 30*time.Second {
+		t.Errorf("SessionTimeout = %v, want 30s", udp.SessionTimeout)
+	}
+	if udp.BufferSize != 4096 {
+		t.Errorf("BufferSize = %d, want 4096", udp.BufferSize)
+	}
+	if udp.Logging == nil || !udp.Logging.LogSessionStart || !udp.Logging.LogSessionClose {
+		t.Error("UDP logging defaults were not applied")
+	}
+}
+
 func TestLoadConfig_InvalidFile(t *testing.T) {
 	_, err := LoadConfig("/nonexistent/path/config.yaml")
 	if err == nil {
@@ -302,6 +351,141 @@ func TestLoadConfig_InvalidYAML(t *testing.T) {
 	_, err := LoadConfig(configPath)
 	if err == nil {
 		t.Error("Expected error for invalid YAML")
+	}
+}
+
+func TestLoadConfig_ConfigDirectoryMergesListenersInFilenameOrder(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	configDir := filepath.Join(tmpDir, "config.d")
+	if err := os.Mkdir(configDir, 0755); err != nil {
+		t.Fatalf("Mkdir() error = %v", err)
+	}
+
+	baseConfig := `
+server:
+  name: "test-server"
+logging:
+  stdout:
+    enabled: true
+listeners:
+  - name: "web"
+    protocol: "tcp"
+    listen_address: "127.0.0.1:8080"
+    target_address: "127.0.0.1:80"
+    allowlist: ["127.0.0.1"]
+`
+	firstFragment := `
+name: "dns"
+protocol: "udp"
+listen_address: "127.0.0.1:5353"
+target_address: "127.0.0.1:53"
+allowlist: ["127.0.0.1"]
+`
+	overrideFragment := `
+listeners:
+  - name: "web"
+    protocol: "tcp"
+    listen_address: "127.0.0.1:8080"
+    target_address: "127.0.0.1:8081"
+    allowlist: ["127.0.0.1"]
+`
+
+	for path, content := range map[string]string{
+		configPath:                              baseConfig,
+		filepath.Join(configDir, "10-dns.yaml"): firstFragment,
+		filepath.Join(configDir, "20-web.yml"):  overrideFragment,
+		filepath.Join(configDir, "ignored.txt"): "not yaml",
+	} {
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", path, err)
+		}
+	}
+
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if len(cfg.Listeners) != 2 {
+		t.Fatalf("len(Listeners) = %d, want 2", len(cfg.Listeners))
+	}
+	if cfg.Listeners[0].Name != "web" || cfg.Listeners[0].TargetAddress != "127.0.0.1:8081" {
+		t.Fatalf("web listener was not overridden: %+v", cfg.Listeners[0])
+	}
+	if cfg.Listeners[1].Name != "dns" || cfg.Listeners[1].UDP == nil {
+		t.Fatalf("dns listener was not appended with UDP defaults: %+v", cfg.Listeners[1])
+	}
+}
+
+func TestLoadConfig_ConfigDirectoryRejectsUnknownFields(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	configDir := filepath.Join(tmpDir, "config.d")
+	if err := os.Mkdir(configDir, 0755); err != nil {
+		t.Fatalf("Mkdir() error = %v", err)
+	}
+
+	if err := os.WriteFile(configPath, []byte(`
+server:
+  name: "test-server"
+logging:
+  stdout:
+    enabled: true
+listeners:
+  - name: "web"
+    protocol: "tcp"
+    listen_address: "127.0.0.1:8080"
+    target_address: "127.0.0.1:80"
+    allowlist: ["127.0.0.1"]
+`), 0644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "bad.yaml"), []byte(`
+name: "bad"
+protocol: "tcp"
+listen_address: "127.0.0.1:8081"
+target_address: "127.0.0.1:81"
+unknown_option: true
+`), 0644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	if _, err := LoadConfig(configPath); err == nil {
+		t.Fatal("LoadConfig() accepted an unknown fragment field")
+	}
+}
+
+func TestValidateReload(t *testing.T) {
+	current := &Config{
+		Server:  ServerConfig{Name: "server", ShutdownTimeout: 30 * time.Second},
+		Logging: LoggingConfig{Stdout: StdoutConfig{Enabled: true}},
+		Metrics: MetricsConfig{Prometheus: PrometheusConfig{Enabled: false}},
+	}
+	next := *current
+	next.Server.ShutdownTimeout = time.Minute
+	if err := ValidateReload(current, &next); err != nil {
+		t.Fatalf("shutdown timeout change should be reloadable: %v", err)
+	}
+
+	next.Logging.Stdout.UseJSON = true
+	if err := ValidateReload(current, &next); err == nil {
+		t.Fatal("logging change should require restart")
+	}
+}
+
+func TestRepositoryExampleConfigAndFragments(t *testing.T) {
+	cfg, err := LoadConfigWithDir(
+		filepath.Join("..", "..", "configs", "example.yaml"),
+		filepath.Join("..", "..", "configs", "config.d.example"),
+	)
+	if err != nil {
+		t.Fatalf("LoadConfigWithDir() error = %v", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("repository examples are invalid: %v", err)
 	}
 }
 

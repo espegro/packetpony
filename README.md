@@ -13,6 +13,8 @@ PacketPony is a modern network proxy/forwarder service written in Go, inspired b
 - [Installation](#installation)
 - [Configuration](#configuration)
   - [Minimal Configuration](#minimal-configuration)
+  - [Configuration Directory](#configuration-directory)
+  - [Reloading Configuration](#reloading-configuration)
   - [Listener Configuration](#listener-configuration)
   - [TCP-Specific Settings](#tcp-specific-settings)
   - [UDP-Specific Settings](#udp-specific-settings)
@@ -58,6 +60,8 @@ PacketPony is a modern network proxy/forwarder service written in Go, inspired b
 - **Prometheus Metrics**: Built-in metrics endpoint for monitoring
 - **Health Checks**: Health endpoints at `/health`, `/healthz`, and `/ready` for Kubernetes probes
 - **Graceful Shutdown**: Safe shutdown with timeout for active connections
+- **Hot Reload**: Reload listener configuration with `SIGHUP` without dropping established TCP connections
+- **Configuration Fragments**: Split listeners across ordered `config.d/*.yaml` files
 
 ## Quick Start
 
@@ -149,7 +153,8 @@ packetpony/
 │   ├── logging/                     # Syslog and JSON logging
 │   ├── metrics/                     # Prometheus metrics
 │   └── session/                     # UDP session tracking
-└── configs/example.yaml             # Example configuration
+├── configs/example.yaml             # Complete single-file configuration
+└── configs/config.d.example/        # Example listener fragments
 ```
 
 ## Installation
@@ -266,6 +271,65 @@ Server-level settings that apply globally:
   - Active connections are forcefully closed after this timeout
   - Increase for services with long-lived connections
   - Format: duration string (e.g., `30s`, `1m`, `90s`)
+
+### Configuration Directory
+
+PacketPony automatically loads listener fragments from a `config.d` directory
+next to the main configuration file. For `/etc/packetpony/config.yaml`, the
+default fragment directory is `/etc/packetpony/config.d`.
+
+The main file owns process-wide settings such as `server`, `logging`, and
+`metrics`. Fragment files define listeners only.
+
+Each `*.yaml` or `*.yml` file may contain one listener directly:
+
+```yaml
+name: "ssh-proxy"
+protocol: "tcp"
+listen_address: "0.0.0.0:2222"
+target_address: "192.168.1.10:22"
+allowlist:
+  - "192.168.1.0/24"
+```
+
+Alternatively, a fragment may contain a `listeners:` list. Files are applied in
+lexical filename order. A later listener with the same `name` replaces the
+entire earlier listener definition; fields are not merged individually. Use
+`-config-dir /path/to/directory` to override the default directory.
+
+The repository includes copyable examples:
+
+```bash
+sudo install -d /etc/packetpony/config.d
+sudo install -o root -g packetpony -m 640 \
+  configs/config.d.example/*.yaml /etc/packetpony/config.d/
+```
+
+Files with other extensions and subdirectories are ignored. Unknown YAML fields
+in fragments are rejected.
+
+### Reloading Configuration
+
+After changing the main file or fragments on Unix systems, reload with:
+
+```bash
+kill -HUP "$(pidof packetpony)"
+# Or with the supplied systemd unit:
+sudo systemctl reload packetpony
+```
+
+The complete new configuration is parsed and validated before runtime changes
+are applied. If parsing, validation, or listener startup fails, PacketPony logs
+the error and keeps the previous configuration active.
+
+- Existing TCP connections continue using their previous target and settings.
+- New TCP connections use the reloaded listener.
+- Changed or removed UDP listeners close their current sessions because a UDP
+  socket cannot be drained and rebound portably.
+- Listener changes and `server.shutdown_timeout` are reloadable.
+- Changes to logging, metrics, or `server.name` require a process restart.
+- Windows loads `config.d` at startup, but requires a service restart to apply
+  changes because Windows has no `SIGHUP`.
 
 ### Listener configuration
 
@@ -1113,10 +1177,13 @@ jq 'select(.bytes_sent + .bytes_received > 1000000)' /var/log/packetpony/debug.j
 
 **Q: Does PacketPony support hot reload of configuration?**
 
-A: No, PacketPony does not support hot reload. You must restart the service to apply configuration changes:
+A: Yes, on Unix systems send `SIGHUP`, or use systemd:
 ```bash
-sudo systemctl restart packetpony
+sudo systemctl reload packetpony
 ```
+
+Listener changes and `server.shutdown_timeout` are reloadable. Changes to
+logging, metrics, or `server.name` require a restart.
 
 **Q: Can I run multiple PacketPony instances?**
 
@@ -1411,20 +1478,18 @@ A: Reduce:
 
 **Graceful Updates:**
 ```bash
-# 1. Test new configuration
-./packetpony -config /etc/packetpony/config.yaml.new
-
-# 2. If valid, backup old config
+# 1. Back up the current configuration
 sudo cp /etc/packetpony/config.yaml /etc/packetpony/config.yaml.bak
 
-# 3. Deploy new config
+# 2. Deploy the new main file and/or config.d fragments
 sudo cp /etc/packetpony/config.yaml.new /etc/packetpony/config.yaml
 
-# 4. Restart service
-sudo systemctl restart packetpony
+# 3. Reload. Invalid configuration is rejected and the old runtime remains active.
+sudo systemctl reload packetpony
 
-# 5. Verify
+# 4. Verify the reload result
 sudo systemctl status packetpony
+sudo journalctl -u packetpony -n 30 --no-pager
 curl http://localhost:9090/health
 ```
 
@@ -1435,7 +1500,7 @@ sudo systemctl kill packetpony
 
 # Rollback configuration
 sudo cp /etc/packetpony/config.yaml.bak /etc/packetpony/config.yaml
-sudo systemctl restart packetpony
+sudo systemctl reload packetpony
 
 # Disable service if broken
 sudo systemctl stop packetpony
@@ -1486,6 +1551,10 @@ PacketPony supports graceful shutdown:
 
 - `SIGINT` (Ctrl+C): Graceful shutdown
 - `SIGTERM`: Graceful shutdown
+- `SIGHUP`: Validate and reload configuration without dropping established TCP connections
+
+`SIGHUP` reload is available on Unix systems. Windows services must be
+restarted after configuration changes.
 
 On shutdown:
 1. Stop accepting new connections

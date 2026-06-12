@@ -5,6 +5,20 @@ All notable changes to PacketPony will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-06-12
+
+### Added
+
+- Listener fragments from `config.d/*.yaml`, loaded in filename order
+- Configuration reload with `SIGHUP` and `systemctl reload packetpony`
+- Connection-preserving TCP listener replacement during reload
+
+### Fixed
+
+- UDP session cleanup now releases sockets, rate-limit capacity, and metrics exactly once
+- Graceful shutdown now drains TCP connections before enforcing its timeout
+- TCP proxy half-close handling and per-connection context goroutine cleanup
+
 ## [1.0.0] - 2026-04-11
 
 ### Added
@@ -81,3 +95,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Efficient sliding window rate limiting
 
 [1.0.0]: https://github.com/espegro/packetpony/releases/tag/v1.0.0
+[1.1.0]: https://github.com/espegro/packetpony/compare/v1.0.0...v1.1.0

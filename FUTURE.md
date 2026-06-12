@@ -11,76 +11,19 @@ This document tracks potential future improvements to PacketPony. Items are cate
 
 ---
 
-## ⏸️ Configuration Hot Reload (Wait for Demand)
+## ✅ Configuration Hot Reload
 
-**Status:** Deferred until requested by users  
-**Complexity:** 🔴 High  
-**Value:** Medium-High (only for specific use cases)
+Implemented with ordered `config.d/*.yaml` listener fragments and `SIGHUP`
+reload on Unix systems. Changed TCP listeners drain established connections
+while new connections use the new configuration. Invalid reloads leave the
+current runtime configuration active.
 
-### Problem
+Potential future extensions:
 
-Currently, changing configuration requires restarting PacketPony, which drops all active connections. For services with thousands of long-lived connections, this is disruptive.
-
-### Proposed Solution
-
-**Option 1: SIGHUP-based reload**
-```bash
-# Edit configuration
-vim /etc/packetpony/config.yaml
-
-# Reload without full restart
-systemctl reload packetpony  # or kill -HUP $(pidof packetpony)
-```
-
-Implementation:
-1. Catch `SIGHUP` signal
-2. Read new configuration file
-3. Diff old vs new configuration
-4. Stop only changed listeners
-5. Start them with new config
-6. Leave unchanged listeners running
-
-**Option 2: Configuration directory**
-```
-/etc/packetpony/
-├── packetpony.yaml        # Server + global settings
-└── listeners.d/
-    ├── http.yaml          # Individual listener configs
-    ├── https.yaml
-    └── ssh.yaml
-```
-
-Benefits:
-- Easier to determine what changed (file mtime)
-- Better organization (one file per listener)
-- Git-friendly (clean diffs)
-- Foundation for hot reload
-
-### Implementation Challenges
-
-- Config diffing logic (~200 lines)
-- Partial listener restart (~150 lines)
-- Shared state management (metrics, rate limiters)
-- What if new config is invalid?
-- Extensive testing needed
-- **Estimated effort:** 2-3 days
-
-### Alternative Approaches (Available Now)
-
-Users can achieve zero-downtime config changes using:
-1. **Multiple instances behind load balancer** - Rolling updates
-2. **Kubernetes/Docker** - Built-in rolling updates
-3. **SystemD socket activation** - Accept connections during restart
-4. **Blue-green deployment** - Switch traffic between instances
-
-### When to Implement
-
-Consider implementing when:
-- Multiple users request this feature
-- Users report disruption from restarts as a blocker
-- PacketPony is commonly used in scenarios with thousands of long-lived connections
-
-**Recommendation:** Wait for real-world demand before investing effort.
+- Native Windows reload control
+- Filesystem watcher for automatic reload
+- Reloadable logging and metrics backends
+- Standalone configuration validation command
 
 ---
 

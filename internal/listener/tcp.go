@@ -2,6 +2,7 @@ package listener
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -26,6 +27,8 @@ type TCPListener struct {
 	rateLimiter   *ratelimit.RateLimitManager
 	activeConnsMu sync.Mutex
 	activeConns   []net.Conn
+	stopOnce      sync.Once
+	cleanupOnce   sync.Once
 }
 
 // NewTCPListener creates a new TCP listener
@@ -89,28 +92,51 @@ func (l *TCPListener) Stop() error {
 		"listener": l.config.Name,
 	})
 
-	// Cancel context to signal shutdown
-	l.cancel()
-
-	// Close listener to stop accepting new connections
-	if l.listener != nil {
-		l.listener.Close()
+	if err := l.Drain(); err != nil {
+		return err
 	}
-
-	// Close all active connections to force Read() calls to return
-	l.closeAllConnections()
-
-	// Close rate limiter cleanup goroutines
-	l.rateLimiter.Close()
-
-	// Wait for all connection handlers to finish
-	l.wg.Wait()
+	if err := l.Wait(); err != nil {
+		return err
+	}
 
 	l.logger.LogInfo("TCP listener stopped", map[string]interface{}{
 		"listener": l.config.Name,
 	})
 
 	return nil
+}
+
+// Drain stops accepting new connections while existing connections continue.
+func (l *TCPListener) Drain() error {
+	l.stopAccepting()
+	return nil
+}
+
+// Wait blocks until the accept loop and all active connections have finished.
+func (l *TCPListener) Wait() error {
+	l.wg.Wait()
+	l.closeRateLimiter()
+	return nil
+}
+
+// ForceStop closes active connections and waits for all handlers to finish.
+func (l *TCPListener) ForceStop() error {
+	l.cancel()
+	l.stopAccepting()
+	l.closeAllConnections()
+	return l.Wait()
+}
+
+func (l *TCPListener) stopAccepting() {
+	l.stopOnce.Do(func() {
+		if l.listener != nil {
+			l.listener.Close()
+		}
+	})
+}
+
+func (l *TCPListener) closeRateLimiter() {
+	l.cleanupOnce.Do(l.rateLimiter.Close)
 }
 
 // trackConnection adds a connection to the active connections list
@@ -155,6 +181,9 @@ func (l *TCPListener) acceptLoop() {
 	for {
 		conn, err := l.listener.Accept()
 		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
 			select {
 			case <-l.ctx.Done():
 				// Shutdown requested

@@ -3,6 +3,7 @@ package proxy
 
 import (
 	"net"
+	"sync"
 	"time"
 
 	"github.com/espegro/packetpony/internal/acl"
@@ -23,6 +24,7 @@ type UDPProxy struct {
 	sessionManager *session.SessionManager
 	metrics        *metrics.ProxyMetrics
 	bufferSize     int
+	wg             sync.WaitGroup
 }
 
 // NewUDPProxy creates a new UDP proxy
@@ -39,7 +41,7 @@ func NewUDPProxy(
 		bufferSize = cfg.UDP.BufferSize
 	}
 
-	return &UDPProxy{
+	udpProxy := &UDPProxy{
 		config:         cfg,
 		logger:         logger,
 		rateLimiter:    rateLimiter,
@@ -48,6 +50,8 @@ func NewUDPProxy(
 		metrics:        metricsCollector,
 		bufferSize:     bufferSize,
 	}
+	sessionManager.SetRemoveHandler(udpProxy.finalizeSession)
+	return udpProxy
 }
 
 // HandlePacket handles a single UDP packet
@@ -86,6 +90,7 @@ func (p *UDPProxy) HandlePacket(data []byte, srcAddr *net.UDPAddr, listenerConn 
 			p.sessionManager.Remove(sess.ID)
 			return
 		}
+		sess.MarkAdmitted()
 
 		// Log session open if enabled
 		if p.config.UDP.Logging.LogSessionStart {
@@ -106,7 +111,11 @@ func (p *UDPProxy) HandlePacket(data []byte, srcAddr *net.UDPAddr, listenerConn 
 		p.metrics.ConnectionsActive.WithLabelValues(p.config.Name, "udp").Inc()
 
 		// Start reading from target
-		go p.startSessionReader(sess, listenerConn)
+		p.wg.Add(1)
+		go func() {
+			defer p.wg.Done()
+			p.startSessionReader(sess, listenerConn)
+		}()
 	}
 
 	// Check bandwidth limit
@@ -145,7 +154,7 @@ func (p *UDPProxy) HandlePacket(data []byte, srcAddr *net.UDPAddr, listenerConn 
 			"error":    err.Error(),
 		})
 		p.metrics.Errors.WithLabelValues(p.config.Name, "target_write").Inc()
-		p.cleanupSession(sess)
+		p.sessionManager.Remove(sess.ID)
 		return
 	}
 
@@ -155,9 +164,14 @@ func (p *UDPProxy) HandlePacket(data []byte, srcAddr *net.UDPAddr, listenerConn 
 	p.metrics.PacketsTransferred.WithLabelValues(p.config.Name, "sent").Inc()
 }
 
+// Wait blocks until all UDP session reader goroutines have exited.
+func (p *UDPProxy) Wait() {
+	p.wg.Wait()
+}
+
 // startSessionReader reads responses from target and sends back to client
 func (p *UDPProxy) startSessionReader(sess *session.Session, listenerConn *net.UDPConn) {
-	defer p.cleanupSession(sess)
+	defer p.sessionManager.Remove(sess.ID)
 
 	buf := make([]byte, p.bufferSize)
 
@@ -244,16 +258,11 @@ func (p *UDPProxy) startSessionReader(sess *session.Session, listenerConn *net.U
 	}
 }
 
-// cleanupSession cleans up a session and logs statistics
-func (p *UDPProxy) cleanupSession(sess *session.Session) {
-	// Remove from session manager
-	removed := p.sessionManager.Remove(sess.ID)
-	if removed == nil {
-		return // Already cleaned up
+// finalizeSession releases resources accounted for an admitted session.
+func (p *UDPProxy) finalizeSession(sess *session.Session) {
+	if !sess.IsAdmitted() {
+		return
 	}
-
-	// Close connection
-	sess.TargetConn.Close()
 
 	// Release rate limits
 	p.rateLimiter.ReleaseConnection(sess.SourceAddr.IP.String())

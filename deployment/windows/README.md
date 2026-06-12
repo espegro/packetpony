@@ -31,6 +31,7 @@ Copy-Item "C:\Temp\nssm\nssm-2.24\win64\nssm.exe" -Destination "C:\Windows\Syste
 
 # 3. Create config directory
 New-Item -Path "C:\ProgramData\PacketPony" -ItemType Directory -Force
+New-Item -Path "C:\ProgramData\PacketPony\config.d" -ItemType Directory -Force
 
 # 4. Copy example config
 Copy-Item "C:\Program Files\PacketPony\configs\example.yaml" -Destination "C:\ProgramData\PacketPony\config.yaml"
@@ -225,10 +226,20 @@ C:\Program Files\PacketPony\      # Installation directory
 
 C:\ProgramData\PacketPony\        # Configuration and data
 ├── config.yaml                   # Active configuration
+├── config.d\                     # Optional listener fragments
 └── logs\                         # Log files (if using NSSM)
     ├── stdout.log
     └── stderr.log
 ```
+
+`config.d\*.yaml` files are loaded at service startup. Windows does not provide
+the Unix `SIGHUP` reload signal, so restart the NSSM service after changing
+configuration.
+
+The main file contains `server`, `logging`, and `metrics`. Each fragment contains
+one listener directly or a `listeners:` list. Files are loaded in lexical
+filename order, and later definitions replace the complete listener with the
+same `name`; fields are not merged individually.
 
 ### Example Configuration
 

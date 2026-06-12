@@ -145,18 +145,24 @@ func (p *TCPProxy) HandleConnection(ctx context.Context, clientConn net.Conn) {
 
 	// Bidirectional copy with context monitoring
 	errChan := make(chan error, 2)
+	connDone := make(chan struct{})
+	defer close(connDone)
 
 	// Monitor context and close connections on cancel
 	go func() {
-		<-ctx.Done()
-		// Force connections to close, which will terminate ongoing io operations
-		clientConn.Close()
-		targetConn.Close()
+		select {
+		case <-ctx.Done():
+			// Force connections to close, which will terminate ongoing io operations
+			clientConn.Close()
+			targetConn.Close()
+		case <-connDone:
+		}
 	}()
 
 	// Client to target
 	go func() {
 		written, err := p.copyWithStats(targetConn, clientConn, &stats.bytesSent, clientIP)
+		closeWrite(targetConn)
 		if err != nil && err != io.EOF {
 			errChan <- fmt.Errorf("client->target: %w", err)
 		} else {
@@ -168,6 +174,7 @@ func (p *TCPProxy) HandleConnection(ctx context.Context, clientConn net.Conn) {
 	// Target to client
 	go func() {
 		written, err := p.copyWithStats(clientConn, targetConn, &stats.bytesReceived, clientIP)
+		closeWrite(clientConn)
 		if err != nil && err != io.EOF {
 			errChan <- fmt.Errorf("target->client: %w", err)
 		} else {
@@ -193,6 +200,12 @@ func (p *TCPProxy) HandleConnection(ctx context.Context, clientConn net.Conn) {
 	// Record duration
 	duration := time.Since(stats.startTime)
 	p.metrics.ConnectionDuration.WithLabelValues(p.config.Name, "tcp").Observe(duration.Seconds())
+}
+
+func closeWrite(conn net.Conn) {
+	if tcpConn, ok := conn.(*net.TCPConn); ok {
+		_ = tcpConn.CloseWrite()
+	}
 }
 
 // copyWithStats copies data and tracks bandwidth limits

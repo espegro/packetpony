@@ -166,8 +166,8 @@ install: build
 	@echo "Installing $(BINARY_NAME)..."
 	install -d $(DESTDIR)$(BINDIR)
 	install -m 755 $(BINARY_NAME) $(DESTDIR)$(BINDIR)/$(BINARY_NAME)
+	install -d $(DESTDIR)$(CONFIGDIR)/config.d
 	@if [ ! -f $(DESTDIR)$(CONFIGDIR)/config.yaml ]; then \
-		install -d $(DESTDIR)$(CONFIGDIR); \
 		install -m 644 configs/example.yaml $(DESTDIR)$(CONFIGDIR)/config.yaml; \
 		echo "Config installed to $(CONFIGDIR)/config.yaml"; \
 	else \
