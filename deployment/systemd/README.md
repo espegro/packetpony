@@ -117,10 +117,34 @@ one listener directly or a `listeners:` list.
 
 If you need to bind to privileged ports (< 1024), the service file includes `CAP_NET_BIND_SERVICE` capability. This is more secure than running as root.
 
-If you don't need privileged ports, you can remove these lines from the service file:
+**Important**: Both `AmbientCapabilities` and `CapabilityBoundingSet` are required:
 ```ini
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+```
+
+If you don't need privileged ports, you can remove these lines from the service file.
+
+#### SELinux Considerations
+
+If running on a system with SELinux in enforcing mode (common on RHEL/CentOS/Fedora), the capabilities should work out of the box for standard ports like DNS (53).
+
+To verify SELinux is not blocking:
+```bash
+# Check SELinux status
+getenforce
+
+# Check for denials
+ausearch -m avc -ts recent | grep packetpony
+
+# Check allowed ports
+semanage port -l | grep -E 'dns_port_t|http_port_t'
+```
+
+If you need to bind to non-standard privileged ports, you may need to add a custom SELinux policy or set the port type:
+```bash
+# Example: Allow binding to port 443
+sudo semanage port -a -t http_port_t -p tcp 443
 ```
 
 ### Security Hardening

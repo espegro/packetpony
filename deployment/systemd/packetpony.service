@@ -10,7 +10,7 @@ User=packetpony
 Group=packetpony
 
 # Paths
-ExecStart=/usr/local/bin/packetpony -config /etc/packetpony/config.yaml
+ExecStart=/usr/local/bin/packetpony -config /etc/packetpony/config.yaml -config-dir /etc/packetpony/config.d
 ExecReload=/bin/kill -HUP $MAINPID
 WorkingDirectory=/var/lib/packetpony
 
