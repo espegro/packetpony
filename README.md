@@ -341,8 +341,8 @@ Each listener can be configured with:
 - **target_address**: IP:port to forward traffic to
 - **allowlist**: List of IP addresses and/or CIDR ranges
 - **rate_limits**:
-  - `max_connections_per_ip`: Max active connections per IP
-  - `connections_window`: Time window for connection counting (e.g., "1m", "30s")
+  - `max_connections_per_ip`: Max *concurrent* connections per IP (a slot is held for the lifetime of each connection and released on close)
+  - `connections_window`: **Deprecated and ignored.** `max_connections_per_ip` is now a concurrency limit, not a per-window rate. Use `max_connection_attempts_per_ip` for rate limiting. The field is still accepted so existing configs keep loading.
   - `max_connection_attempts_per_ip`: Max connection attempts (including rejected)
   - `attempts_window`: Time window for attempt counting
   - `max_bandwidth_per_ip`: Max bandwidth per IP (e.g., "10MB", "1GB")
@@ -376,8 +376,8 @@ PacketPony uses a sliding window approach for rate limiting with multiple enforc
 
 ### Limit Types
 
-- **Connection Limiting**: Tracks active (successful) connections per IP using a sliding window
-- **Attempt Limiting**: Tracks ALL connection attempts per IP, including rejected ones
+- **Connection Limiting**: Caps the number of *concurrent* connections per IP. A slot is reserved when a connection is admitted and released when it closes (`connections_window` is ignored; see deprecation note above).
+- **Attempt Limiting**: Tracks ALL connection attempts per IP within `attempts_window`, including rejected ones — this is the sliding-window *rate* limit
   - Protects against SYN flood and connection spam attacks
   - Typically set higher than connection limit (e.g., 4-5x)
 - **Bandwidth Limiting**: Tracks bytes consumed per IP in a sliding window
@@ -1216,8 +1216,8 @@ A: PacketPony uses a sliding window approach:
 **Q: What's the difference between connection limit and attempt limit?**
 
 A:
-- **Connection limit**: Tracks only successful, active connections
-- **Attempt limit**: Tracks ALL connection attempts, including rejected ones (ACL, rate limits, errors)
+- **Connection limit**: Caps concurrent active connections per IP (slot held until the connection closes)
+- **Attempt limit**: Rate-limits ALL connection attempts per IP within a time window, including rejected ones (ACL, rate limits, errors)
 - Use attempt limit to prevent connection spam/SYN floods
 - Recommended: `max_connection_attempts_per_ip` = 4-5x `max_connections_per_ip`
 

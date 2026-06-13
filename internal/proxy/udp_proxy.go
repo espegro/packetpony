@@ -118,11 +118,11 @@ func (p *UDPProxy) HandlePacket(data []byte, srcAddr *net.UDPAddr, listenerConn 
 		}()
 	}
 
-	// Check bandwidth limit
-	allowed := p.rateLimiter.AllowBandwidth(clientIP, int64(len(data)))
+	// Check bandwidth limit (single pass returns both decisions)
+	allowed, overLimit := p.rateLimiter.AllowBandwidth(clientIP, int64(len(data)))
 
 	// Log if over limit (works for all modes)
-	if p.rateLimiter.IsBandwidthOverLimit(clientIP, int64(len(data))) {
+	if overLimit {
 		action := p.rateLimiter.GetAction()
 		if action == "log_only" {
 			p.logger.LogWarning("Bandwidth limit exceeded (log_only mode)", map[string]interface{}{
@@ -203,12 +203,12 @@ func (p *UDPProxy) startSessionReader(sess *session.Session, listenerConn *net.U
 		}
 
 		if n > 0 {
-			// Check bandwidth limit for return traffic
+			// Check bandwidth limit for return traffic (single pass)
 			clientIP := sess.SourceAddr.IP.String()
-			allowed := p.rateLimiter.AllowBandwidth(clientIP, int64(n))
+			allowed, overLimit := p.rateLimiter.AllowBandwidth(clientIP, int64(n))
 
 			// Log if over limit (works for all modes)
-			if p.rateLimiter.IsBandwidthOverLimit(clientIP, int64(n)) {
+			if overLimit {
 				action := p.rateLimiter.GetAction()
 				if action == "log_only" {
 					p.logger.LogWarning("Bandwidth limit exceeded on return traffic (log_only mode)", map[string]interface{}{

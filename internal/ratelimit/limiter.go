@@ -21,8 +21,8 @@ type RateLimitManager struct {
 // NewRateLimitManager creates a new rate limit manager
 func NewRateLimitManager(cfg config.RateLimitConfig) *RateLimitManager {
 	var connLimiter *ConnectionLimiter
-	if cfg.MaxConnectionsPerIP > 0 && cfg.ConnectionsWindow > 0 {
-		connLimiter = NewConnectionLimiter(cfg.MaxConnectionsPerIP, cfg.ConnectionsWindow)
+	if cfg.MaxConnectionsPerIP > 0 {
+		connLimiter = NewConnectionLimiter(cfg.MaxConnectionsPerIP)
 	}
 
 	var attemptLimiter *AttemptLimiter
@@ -80,21 +80,14 @@ func (m *RateLimitManager) AllowConnection(ip string) bool {
 	return true
 }
 
-// AllowBandwidth checks if bandwidth usage for the given IP is within limits
-func (m *RateLimitManager) AllowBandwidth(ip string, bytes int64) bool {
+// AllowBandwidth checks bandwidth usage for the given IP in a single pass.
+// It returns whether the bytes are allowed under the configured action, and
+// whether the IP is over its limit (for reporting violations, e.g. log_only).
+func (m *RateLimitManager) AllowBandwidth(ip string, bytes int64) (allowed, overLimit bool) {
 	if m.bandwidthLimiter != nil {
-		return m.bandwidthLimiter.Allow(ip, bytes)
+		return m.bandwidthLimiter.AllowWithStatus(ip, bytes)
 	}
-	return true
-}
-
-// IsBandwidthOverLimit checks if the IP would be over the bandwidth limit
-// Useful for logging violations in log_only mode
-func (m *RateLimitManager) IsBandwidthOverLimit(ip string, bytes int64) bool {
-	if m.bandwidthLimiter != nil {
-		return m.bandwidthLimiter.IsOverLimit(ip, bytes)
-	}
-	return false
+	return true, false
 }
 
 // GetAction returns the configured action mode
@@ -141,9 +134,7 @@ func (m *RateLimitManager) GetTotalConnections() int64 {
 
 // Close stops all cleanup goroutines
 func (m *RateLimitManager) Close() {
-	if m.connLimiter != nil {
-		m.connLimiter.Close()
-	}
+	// connLimiter holds no background goroutine and needs no cleanup.
 	if m.attemptLimiter != nil {
 		m.attemptLimiter.Close()
 	}

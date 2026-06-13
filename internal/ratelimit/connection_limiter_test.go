@@ -3,23 +3,21 @@ package ratelimit
 import (
 	"sync"
 	"testing"
-	"time"
 )
 
 func TestConnectionLimiter_Allow(t *testing.T) {
-	limiter := NewConnectionLimiter(3, 1*time.Second)
-	defer limiter.Close()
+	limiter := NewConnectionLimiter(3)
 
 	ip := "192.168.1.1"
 
-	// First 3 connections should be allowed
+	// First 3 concurrent connections should be allowed
 	for i := 0; i < 3; i++ {
 		if !limiter.Allow(ip) {
 			t.Errorf("Connection %d should be allowed", i+1)
 		}
 	}
 
-	// 4th connection should be denied
+	// 4th concurrent connection should be denied
 	if limiter.Allow(ip) {
 		t.Error("4th connection should be denied")
 	}
@@ -33,36 +31,34 @@ func TestConnectionLimiter_Allow(t *testing.T) {
 	}
 }
 
-func TestConnectionLimiter_SlidingWindow(t *testing.T) {
-	window := 100 * time.Millisecond
-	limiter := NewConnectionLimiter(2, window)
-	defer limiter.Close()
+// TestConnectionLimiter_LongLivedRelease verifies the core fix for Alt A:
+// releasing a connection frees exactly one slot regardless of ordering, so a
+// long-lived connection that closes does not corrupt the count of others.
+func TestConnectionLimiter_LongLivedRelease(t *testing.T) {
+	limiter := NewConnectionLimiter(2)
 
 	ip := "192.168.1.1"
 
-	// Use up the quota
-	if !limiter.Allow(ip) {
-		t.Fatal("First connection should be allowed")
-	}
-	if !limiter.Allow(ip) {
-		t.Fatal("Second connection should be allowed")
+	// Open two concurrent connections (at the limit).
+	if !limiter.Allow(ip) || !limiter.Allow(ip) {
+		t.Fatal("first two connections should be allowed")
 	}
 	if limiter.Allow(ip) {
-		t.Error("Third connection should be denied")
+		t.Fatal("third concurrent connection should be denied")
 	}
 
-	// Wait for window to expire
-	time.Sleep(window + 50*time.Millisecond)
-
-	// Should be allowed again
+	// The first (long-lived) connection closes; exactly one slot frees up.
+	limiter.Release(ip)
 	if !limiter.Allow(ip) {
-		t.Error("Connection after window expiry should be allowed")
+		t.Error("a slot should be free after one release")
+	}
+	if limiter.Allow(ip) {
+		t.Error("only one slot should have been freed")
 	}
 }
 
 func TestConnectionLimiter_MultipleIPs(t *testing.T) {
-	limiter := NewConnectionLimiter(2, 1*time.Second)
-	defer limiter.Close()
+	limiter := NewConnectionLimiter(2)
 
 	ip1 := "192.168.1.1"
 	ip2 := "192.168.1.2"
@@ -91,8 +87,7 @@ func TestConnectionLimiter_MultipleIPs(t *testing.T) {
 }
 
 func TestConnectionLimiter_Release(t *testing.T) {
-	limiter := NewConnectionLimiter(2, 1*time.Second)
-	defer limiter.Close()
+	limiter := NewConnectionLimiter(2)
 
 	ip := "192.168.1.1"
 
@@ -114,85 +109,61 @@ func TestConnectionLimiter_Release(t *testing.T) {
 }
 
 func TestConnectionLimiter_ReleaseNonExistent(t *testing.T) {
-	limiter := NewConnectionLimiter(2, 1*time.Second)
-	defer limiter.Close()
+	limiter := NewConnectionLimiter(2)
 
 	// Releasing non-existent IP should not panic
 	limiter.Release("192.168.1.1")
 }
 
+// TestConnectionLimiter_EntryRemovedAtZero verifies the map self-prunes so it
+// does not grow unbounded across many short-lived clients.
+func TestConnectionLimiter_EntryRemovedAtZero(t *testing.T) {
+	limiter := NewConnectionLimiter(5)
+
+	ip := "192.168.1.1"
+	limiter.Allow(ip)
+	limiter.Release(ip)
+
+	limiter.mu.Lock()
+	_, exists := limiter.active[ip]
+	limiter.mu.Unlock()
+	if exists {
+		t.Error("entry should be removed once its count reaches zero")
+	}
+}
+
 func TestConnectionLimiter_ConcurrentAccess(t *testing.T) {
-	limiter := NewConnectionLimiter(100, 1*time.Second)
-	defer limiter.Close()
+	limiter := NewConnectionLimiter(100)
 
 	const numGoroutines = 50
-	const numOps = 10
 	ip := "192.168.1.1"
 
 	var wg sync.WaitGroup
-	wg.Add(numGoroutines * 2)
+	wg.Add(numGoroutines)
 
-	// Concurrent Allow operations
+	// Each goroutine acquires and releases a slot; with balanced Allow/Release
+	// the final count must return to zero and the entry must be pruned.
 	for i := 0; i < numGoroutines; i++ {
 		go func() {
 			defer wg.Done()
-			for j := 0; j < numOps; j++ {
-				limiter.Allow(ip)
-				time.Sleep(1 * time.Millisecond)
-			}
-		}()
-	}
-
-	// Concurrent Release operations
-	for i := 0; i < numGoroutines; i++ {
-		go func() {
-			defer wg.Done()
-			for j := 0; j < numOps; j++ {
+			if limiter.Allow(ip) {
 				limiter.Release(ip)
-				time.Sleep(1 * time.Millisecond)
 			}
 		}()
 	}
 
 	wg.Wait()
 
-	// No panics = success
-}
-
-func TestConnectionLimiter_Cleanup(t *testing.T) {
-	window := 50 * time.Millisecond
-	limiter := NewConnectionLimiter(5, window)
-	defer limiter.Close()
-
-	ip := "192.168.1.1"
-
-	// Create an entry
-	limiter.Allow(ip)
-	limiter.Release(ip)
-
-	// Check that entry exists
-	limiter.mu.RLock()
-	_, exists := limiter.connections[ip]
-	limiter.mu.RUnlock()
-	if !exists {
-		t.Fatal("Entry should exist")
-	}
-
-	// Wait for cleanup (window * 2 + margin)
-	time.Sleep(window*2 + 100*time.Millisecond)
-
-	// Entry should be cleaned up
-	limiter.mu.RLock()
-	_, exists = limiter.connections[ip]
-	limiter.mu.RUnlock()
-	if exists {
-		t.Error("Entry should be cleaned up")
+	limiter.mu.Lock()
+	count := limiter.active[ip]
+	limiter.mu.Unlock()
+	if count != 0 {
+		t.Errorf("expected balanced acquire/release to leave count 0, got %d", count)
 	}
 }
 
 func TestConnectionLimiter_ZeroLimit(t *testing.T) {
-	limiter := NewConnectionLimiter(0, 1*time.Second)
-	defer limiter.Close()
+	limiter := NewConnectionLimiter(0)
 
 	ip := "192.168.1.1"
 
@@ -203,8 +174,7 @@ func TestConnectionLimiter_ZeroLimit(t *testing.T) {
 }
 
 func BenchmarkConnectionLimiter_Allow(b *testing.B) {
-	limiter := NewConnectionLimiter(1000, 1*time.Minute)
-	defer limiter.Close()
+	limiter := NewConnectionLimiter(1000)
 
 	ip := "192.168.1.1"
 
@@ -215,8 +185,7 @@ func BenchmarkConnectionLimiter_Allow(b *testing.B) {
 }
 
 func BenchmarkConnectionLimiter_AllowMultipleIPs(b *testing.B) {
-	limiter := NewConnectionLimiter(100, 1*time.Minute)
-	defer limiter.Close()
+	limiter := NewConnectionLimiter(100)
 
 	ips := []string{
 		"192.168.1.1",
@@ -234,8 +203,7 @@ func BenchmarkConnectionLimiter_AllowMultipleIPs(b *testing.B) {
 }
 
 func BenchmarkConnectionLimiter_ConcurrentAllow(b *testing.B) {
-	limiter := NewConnectionLimiter(1000, 1*time.Minute)
-	defer limiter.Close()
+	limiter := NewConnectionLimiter(1000)
 
 	b.RunParallel(func(pb *testing.PB) {
 		ip := "192.168.1.1"

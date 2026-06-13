@@ -32,6 +32,52 @@ func TestBandwidthLimiter_Allow_DropMode(t *testing.T) {
 	}
 }
 
+func TestBandwidthLimiter_AllowWithStatus(t *testing.T) {
+	maxBytes := int64(1000)
+
+	// log_only: traffic under the limit must NOT be reported as over limit.
+	// This guards against the old double-counting bug where recording the
+	// bytes and then re-checking the window counted the same bytes twice
+	// (e.g. usage 0 + 600, then 600 + 600 > 1000 → false positive).
+	limiter := NewBandwidthLimiter(maxBytes, 1*time.Second, "log_only", 0)
+	defer limiter.Close()
+
+	ip := "192.168.1.1"
+
+	allowed, overLimit := limiter.AllowWithStatus(ip, 600)
+	if !allowed {
+		t.Error("600 bytes should be allowed in log_only mode")
+	}
+	if overLimit {
+		t.Error("600 bytes against a 1000 limit must not be reported as over limit")
+	}
+
+	// Now push past the limit: 600 + 600 = 1200 > 1000.
+	allowed, overLimit = limiter.AllowWithStatus(ip, 600)
+	if !allowed {
+		t.Error("log_only mode must still allow traffic over the limit")
+	}
+	if !overLimit {
+		t.Error("second 600 bytes should be reported as over limit (total 1200)")
+	}
+
+	// drop mode: over-limit bytes are denied and reported as over limit,
+	// but rejected bytes must not be recorded against the window.
+	dropLimiter := NewBandwidthLimiter(maxBytes, 1*time.Second, "drop", 0)
+	defer dropLimiter.Close()
+
+	if allowed, overLimit := dropLimiter.AllowWithStatus(ip, 900); !allowed || overLimit {
+		t.Errorf("900/1000 should be allowed and within limit, got allowed=%v overLimit=%v", allowed, overLimit)
+	}
+	if allowed, overLimit := dropLimiter.AllowWithStatus(ip, 200); allowed || !overLimit {
+		t.Errorf("200 bytes (would be 1100) should be denied and over limit, got allowed=%v overLimit=%v", allowed, overLimit)
+	}
+	// The denied 200 bytes were not recorded, so 100 more still fits (900+100).
+	if allowed, overLimit := dropLimiter.AllowWithStatus(ip, 100); !allowed || overLimit {
+		t.Errorf("100 bytes (total 1000) should be allowed and within limit, got allowed=%v overLimit=%v", allowed, overLimit)
+	}
+}
+
 func TestBandwidthLimiter_Allow_ThrottleMode(t *testing.T) {
 	maxBytes := int64(1000)
 	throttleMin := int64(100)

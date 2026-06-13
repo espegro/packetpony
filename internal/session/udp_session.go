@@ -65,7 +65,7 @@ func (m *SessionManager) SetRemoveHandler(handler func(*Session)) {
 func (m *SessionManager) GetOrCreate(srcAddr *net.UDPAddr, targetAddr string) (*Session, bool, error) {
 	key := sessionKey(srcAddr)
 
-	// Check if session exists
+	// Fast path: existing session.
 	m.mu.RLock()
 	session, exists := m.sessions[key]
 	m.mu.RUnlock()
@@ -75,18 +75,11 @@ func (m *SessionManager) GetOrCreate(srcAddr *net.UDPAddr, targetAddr string) (*
 		return session, false, nil
 	}
 
-	// Create new session
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	// Double-check after acquiring write lock
-	session, exists = m.sessions[key]
-	if exists {
-		session.UpdateActivity()
-		return session, false, nil
-	}
-
-	// Create target connection
+	// Dial the target WITHOUT holding the manager lock. A UDP dial against a
+	// hostname performs a DNS lookup that can block; holding m.mu across it
+	// would stall every other session (GetOrCreate, Remove, cleanup) on this
+	// manager. The trade-off is that two goroutines racing on the same new key
+	// may both dial — the loser discards its connection below.
 	targetConn, err := net.DialTimeout("udp", targetAddr, 5*time.Second)
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to dial target: %w", err)
@@ -113,7 +106,18 @@ func (m *SessionManager) GetOrCreate(srcAddr *net.UDPAddr, targetAddr string) (*
 		cancel:               cancel,
 	}
 
+	// Install the session, but yield to a session created concurrently for the
+	// same key while we were dialing.
+	m.mu.Lock()
+	if existing, ok := m.sessions[key]; ok {
+		m.mu.Unlock()
+		cancel()
+		udpConn.Close()
+		existing.UpdateActivity()
+		return existing, false, nil
+	}
 	m.sessions[key] = session
+	m.mu.Unlock()
 
 	return session, true, nil
 }

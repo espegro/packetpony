@@ -53,8 +53,17 @@ func NewBandwidthLimiter(maxPerIP int64, window time.Duration, action string, th
 // Allow checks if the bandwidth usage is within limits
 // Returns true if allowed, false if should be dropped
 func (l *BandwidthLimiter) Allow(ip string, bytes int64) bool {
+	allowed, _ := l.AllowWithStatus(ip, bytes)
+	return allowed
+}
+
+// AllowWithStatus checks bandwidth usage in a single pass over the sliding
+// window. It returns whether the bytes are allowed under the configured action,
+// and whether the IP is over its limit regardless of action (so callers can
+// report violations, e.g. in log_only mode, without scanning the window twice).
+func (l *BandwidthLimiter) AllowWithStatus(ip string, bytes int64) (allowed, overLimit bool) {
 	if bytes == 0 {
-		return true
+		return true, false
 	}
 
 	l.mu.Lock()
@@ -73,10 +82,10 @@ func (l *BandwidthLimiter) Allow(ip string, bytes int64) bool {
 	now := time.Now()
 	cutoff := now.Add(-l.window)
 
-	// Remove expired entries and calculate current usage
-	validEntries := make([]consumptionEntry, 0, len(bucket.entries))
+	// Drop expired entries in place and calculate current usage. Compacting
+	// into the existing backing array avoids an allocation on every call.
+	validEntries := bucket.entries[:0]
 	var currentUsage int64
-
 	for _, entry := range bucket.entries {
 		if entry.timestamp.After(cutoff) {
 			validEntries = append(validEntries, entry)
@@ -85,39 +94,29 @@ func (l *BandwidthLimiter) Allow(ip string, bytes int64) bool {
 	}
 	bucket.entries = validEntries
 
-	// Check if adding this would exceed the limit
-	if currentUsage+bytes > l.maxPerIP {
-		// Handle based on action mode
-		switch l.action {
-		case "log_only":
-			// Log only mode: allow but log the violation
-			bucket.entries = append(bucket.entries, consumptionEntry{
-				bytes:     bytes,
-				timestamp: now,
-			})
-			return true
-		case "throttle":
-			// Throttle mode: allow only up to minimum bandwidth
-			if l.throttleMinimum > 0 && bytes <= l.throttleMinimum {
-				bucket.entries = append(bucket.entries, consumptionEntry{
-					bytes:     bytes,
-					timestamp: now,
-				})
-				return true
-			}
-			return false
-		default: // "drop"
-			return false
-		}
+	overLimit = currentUsage+bytes > l.maxPerIP
+	if !overLimit {
+		// Within limit: record and allow.
+		bucket.entries = append(bucket.entries, consumptionEntry{bytes: bytes, timestamp: now})
+		return true, false
 	}
 
-	// Record the consumption
-	bucket.entries = append(bucket.entries, consumptionEntry{
-		bytes:     bytes,
-		timestamp: now,
-	})
-
-	return true
+	// Over limit: behaviour depends on the action mode.
+	switch l.action {
+	case "log_only":
+		// Allow but report the violation.
+		bucket.entries = append(bucket.entries, consumptionEntry{bytes: bytes, timestamp: now})
+		return true, true
+	case "throttle":
+		// Allow only small chunks up to the configured minimum.
+		if l.throttleMinimum > 0 && bytes <= l.throttleMinimum {
+			bucket.entries = append(bucket.entries, consumptionEntry{bytes: bytes, timestamp: now})
+			return true, true
+		}
+		return false, true
+	default: // "drop"
+		return false, true
+	}
 }
 
 // IsOverLimit checks if an IP is currently over its bandwidth limit

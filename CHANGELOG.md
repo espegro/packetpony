@@ -5,6 +5,19 @@ All notable changes to PacketPony will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **`max_connections_per_ip` is now a concurrent-connection limit** instead of a sliding-window rate. A slot is reserved when a connection is admitted and released when it closes, so the count is always accurate (the old behavior popped the oldest timestamp on release, corrupting the window for long-lived connections). Use `max_connection_attempts_per_ip` for rate limiting.
+- `connections_window` is **deprecated and ignored**. Existing configs still load (the field is accepted), but it no longer has any effect.
+
+### Fixed
+
+- Bandwidth limiting no longer double-counts the current chunk/packet, which previously produced spurious "bandwidth limit exceeded" log entries in `log_only` mode well below the configured limit. The allow/over-limit decision is now computed in a single pass over the window.
+- UDP session creation no longer performs the target dial (including any DNS lookup) while holding the session-manager lock, so a slow or unresolvable target no longer stalls all other sessions on the same listener.
+- Listener `protocol` is now matched case-insensitively for protocol-specific validation (e.g. `TCP`/`UDP` no longer skip TCP/UDP config checks).
+
 ## [1.1.1] - 2026-06-12
 
 ### Changed

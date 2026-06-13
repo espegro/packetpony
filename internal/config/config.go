@@ -87,7 +87,7 @@ type ListenerConfig struct {
 // Supports three actions: drop (reject), throttle (reduce bandwidth), or log_only.
 type RateLimitConfig struct {
 	MaxConnectionsPerIP        int           `yaml:"max_connections_per_ip"`
-	ConnectionsWindow          time.Duration `yaml:"connections_window"`
+	ConnectionsWindow          time.Duration `yaml:"connections_window"` // Deprecated: max_connections_per_ip is now a concurrent-connection limit; this field is ignored.
 	MaxConnectionAttemptsPerIP int           `yaml:"max_connection_attempts_per_ip"`
 	AttemptsWindow             time.Duration `yaml:"attempts_window"`
 	MaxBandwidthPerIP          string        `yaml:"max_bandwidth_per_ip"`
@@ -269,6 +269,9 @@ func applyDefaults(config *Config) error {
 	// Parse bandwidth strings and set defaults for each listener
 	for i := range config.Listeners {
 		listener := &config.Listeners[i]
+
+		// Normalize the protocol so validation and dispatch are case-insensitive.
+		listener.Protocol = strings.ToLower(strings.TrimSpace(listener.Protocol))
 
 		if config.Listeners[i].RateLimits.MaxBandwidthPerIP != "" {
 			bytes, err := ParseBandwidth(config.Listeners[i].RateLimits.MaxBandwidthPerIP)
